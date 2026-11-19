@@ -78,7 +78,8 @@ class Engine:
             "be_params_set": (I, [P, C, D]), "be_params_set_text": (I, [P, C, C]),
             "be_params_get": (I, [P, C, ctypes.POINTER(D)]), "be_params_get_text": (C, [P, C]),
             "be_render": (I, [P, I, S]), "be_kind_supported": (I, [C]), "be_check": (I, [P]),
-            "be_preset_supported": (I, [I]),
+            "be_preset_supported": (I, [I]), "be_is_loop": (I, [P]),
+            "be_finish_loop": (I, [S, C, ctypes.POINTER(C), ctypes.POINTER(D), I]),
             "be_finish": (I, [S, C, ctypes.POINTER(C), ctypes.POINTER(D), I]),
             "be_cut": (None, [S, D, D]), "be_set_peak": (None, [S, D]), "be_write_wav": (I, [S, C, I]),
             "be_sound_free": (None, [S]), "be_preset_count": (I, []), "be_preset_id": (C, [I]),
@@ -140,9 +141,10 @@ class Engine:
                     self.check(self.lib.be_params_set(p, key.encode(), float(value)), key)
             raw = _Sound()
             self.check(self.lib.be_render(p, int(seed), ctypes.byref(raw)), preset or "render")
+            loop = bool(self.lib.be_is_loop(p))
         finally:
             self.lib.be_params_free(p)
-        sound = Sound(self, raw)
+        sound = Sound(self, raw, loop)
         if action or finish:
             sound.finish(action, **(finish or {}))
         return sound
@@ -151,9 +153,10 @@ class Engine:
 class Sound:
     """A rendered sound: stereo, 48 kHz, float. ``left`` and ``right`` copy the samples out as ``array('f')``."""
 
-    def __init__(self, engine, raw):
+    def __init__(self, engine, raw, loop=False):
         self._e = engine
         self._raw = raw
+        self.loop = loop          # a seamless loop (a field's hum): play it looping; finish keeps it one
 
     def __del__(self):
         try:
@@ -198,8 +201,9 @@ class Sound:
                 raise BallisticError(1, "no action parameter of that name (there are: %s)" % ", ".join(known), k)
         keys = (ctypes.c_char_p * max(1, len(params)))(*[k.encode() for k in params])
         values = (ctypes.c_double * max(1, len(params)))(*[float(v) for v in params.values()])
-        self._e.check(self._e.lib.be_finish(ctypes.byref(self._raw), action.encode() if action else None,
-                                            keys, values, len(params)), action or "finish")
+        fn = self._e.lib.be_finish_loop if self.loop else self._e.lib.be_finish
+        self._e.check(fn(ctypes.byref(self._raw), action.encode() if action else None, keys, values, len(params)),
+                      action or "finish")
         return self
 
     def cut(self, seconds, fade=0.04):

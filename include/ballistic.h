@@ -84,6 +84,9 @@ BE_API int be_preset_supported(int i);                          /* BE_OK if this
 /* Ballistic's finishing for action, in place: an action preset ("game", "block", "slow", "far", "none" or NULL),
    then n named action parameters over it (punch, weight, drive, bite, tail, swell, width, loud, slowmo). */
 BE_API int be_finish(be_sound *s, const char *preset, const char *const *keys, const double *values, int n);
+/* A seamless loop (a field's hum: be_is_loop) is finished as a loop, and stays one: */
+BE_API int be_is_loop(const be_params *p);
+BE_API int be_finish_loop(be_sound *s, const char *preset, const char *const *keys, const double *values, int n);
 
 /* Small things a game wants: cut to a length with a short fade, set the peak, write a WAV (16 or 32 bits). */
 BE_API void be_cut(be_sound *s, double seconds, double fade);

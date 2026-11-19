@@ -147,6 +147,18 @@ out(`#define ABLATION_COUNT ${Object.keys(ABL).length}`);
 out('static const be_ablation ABLATION[ABLATION_COUNT] = {');
 for (const [id, a] of Object.entries(ABL)) out(`  { ${cstr(id)}, ${num(a.frac)}, ${num(a.hiss)}, ${SPATTER[id] ? cstr(SPATTER[id]) : '0'} },`);
 out('};');
+const DS = literal('DS'), SHELL = literal('SHELL_DENSITY');
+out(`#define BREAK_COUNT ${Object.keys(DS).length}`);
+out('static const be_break BREAKS[BREAK_COUNT] = {');
+for (const [id, d] of Object.entries(DS)) {
+  out(`  { ${cstr(id)}, ${num(d.e)}, ${num(d.brittle)}, ${cstr(d.groan)}, ${d.fine}, ${d.rubble ? 1 : 0}, ${num(SHELL[id] || 0)} },`);
+}
+out('};');
+const FFR = literal('FF_RATIOS');
+out(`#define FIELD_COUNT ${Object.keys(FFR).length}`);
+out('static const be_field FIELDS[FIELD_COUNT] = {');
+for (const [id, r] of Object.entries(FFR)) out(`  { ${cstr(id)}, ${r.length}, { ${r.map(num).join(', ')} } },`);
+out('};');
 out();
 const TAU = Math.PI * 2, sint = [];
 for (let i = 0; i < 8192; i++) {

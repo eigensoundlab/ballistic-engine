@@ -144,6 +144,16 @@ static float *fcopy(arena *a, const float *x, int n)
     return y;
 }
 
+/* three periods of a loop, end to end */
+static float *tile3(arena *ar, const float *x, int n)
+{
+    float *t = fnew(ar, 3 * n);
+    memcpy(t, x, (size_t)n * sizeof(float));
+    memcpy(t + n, x, (size_t)n * sizeof(float));
+    memcpy(t + 2 * n, x, (size_t)n * sizeof(float));
+    return t;
+}
+
 /* ------------------------------------------------------------------ buffers and filters */
 static double peak_of(const float *L, const float *R, int n)
 {
@@ -2221,6 +2231,1019 @@ static void weapon_layers(scene_t *sc, weapon_t *wp, const be_params *p, const g
         target_layers(sc, &wp->tg, p, o->g3, o->g4, o->t0, r);
 }
 
+/* ------------------------------------------------------------------ discharge: sparks, arcs, lightning */
+typedef struct { double r, t, pan, pk; } dseg_t;
+typedef struct {
+    double El, Rc, Tn;
+    dseg_t *segs, *bsegs;
+    int ns, nb;
+    double rMin, rMax, rMean, tFirst, tLast, dev, tC;
+} dplan_t;
+
+/* a crooked channel: each step bends a little from the last, pulled back toward the main direction */
+static int walk_channel(arena *ar, const double *start, const double *main_, double len, double ds, double tort, rng_t *r,
+                        double **pts_out)
+{
+    int n = (int)maxd(2, js_round(len / ds)), i, k;
+    double *pts = dnew(ar, 3 * (n + 1)), u[3], q[3], m;
+    for (k = 0; k < 3; k++) {
+        pts[k] = start[k];
+        u[k] = main_[k];
+        q[k] = start[k];
+    }
+    for (i = 0; i < n; i++) {
+        for (k = 0; k < 3; k++) {
+            double w = rnd(r);
+            u[k] = u[k] * 0.8 + main_[k] * 0.2 + tort * 0.9 * (w - 0.5);
+        }
+        m = js_hypot3(u[0], u[1], u[2]);
+        if (!m) m = 1;
+        q[0] = q[0] + u[0] / m * ds;
+        q[1] = q[1] + u[1] / m * ds;
+        q[2] = maxd(0, q[2] + u[2] / m * ds);
+        for (k = 0; k < 3; k++)
+            pts[3 * (i + 1) + k] = q[k];
+    }
+    *pts_out = pts;
+    return n + 1;
+}
+
+static void dseg_add(dseg_t *s, const double *a, const double *c, double gain, double Rc, double r0, double ds)
+{
+    static const double ear[3] = { 0, 0, 1.7 };
+    double mid[3], r;
+    int k;
+    for (k = 0; k < 3; k++)
+        mid[k] = (a[k] + c[k]) / 2;
+    r = maxd(maxd(js_hypot3(mid[0] - ear[0], mid[1] - ear[1], mid[2] - ear[2]), Rc), 0.05);
+    s->r = r;
+    s->t = r / C_AIR;
+    s->pan = clampd(mid[1] / r, -1, 1) * 0.9;
+    s->pk = gain * 0.2 * P0 * pow(Rc / r0, 0.75) * r0 / maxd(r, r0) * mind(1, ds / (2 * r0));
+}
+
+/* Thunder after Few: the channel heats a cylinder of relaxation radius Rc = sqrt(E per metre / (pi P0)); every
+   stretch of it sends an N-wave about 2.6 Rc / c long, and the ear hears them spread out by distance. */
+static void plan_discharge(arena *ar, const be_params *p, rng_t *g, dplan_t *pl)
+{
+    double E = PV(p, dcEnergy), Lc = PV(p, dcLength), El = E / Lc, Rc = sqrt(El / (PI * P0)), d = PV(p, dcDist), Tn, ds, r0;
+    double start[3], main_[3], *pts, rSum = 0;
+    int vert = !strcmp(PS(p, dcOrient), "vertical"), nSeg, npts, i, b, nbr = (int)js_round(PV(p, dcBranches)), cap;
+    /* a channel shorter than its own shock radius acts as a point source */
+    if (Rc > Lc / 2)
+        Rc = cbrt(3 * E / (4 * PI * P0));
+    Tn = 2.6 * Rc / C_AIR;
+    nSeg = (int)clampd(js_round(Lc / maxd(4 * Rc, Lc / 300)), 3, 300);
+    ds = Lc / nSeg;
+    if (vert) { start[0] = d; start[1] = 0; start[2] = Lc * 0.85; main_[0] = 0; main_[1] = 0; main_[2] = -1; }
+    else { start[0] = d; start[1] = -Lc * 0.42; start[2] = 1.5; main_[0] = 0; main_[1] = 1; main_[2] = 0; }
+    npts = walk_channel(ar, start, main_, Lc, ds, PV(p, dcTort), g, &pts);
+    r0 = maxd(ds / 2, Rc);
+    pl->segs = (dseg_t *)ar_alloc(ar, (npts - 1) * sizeof(dseg_t));
+    pl->ns = npts - 1;
+    for (i = 0; i < npts - 1; i++)
+        dseg_add(&pl->segs[i], pts + 3 * i, pts + 3 * (i + 1), 1, Rc, r0, ds);
+    cap = 0;
+    pl->bsegs = 0;
+    pl->nb = 0;
+    for (b = 0; b < nbr; b++) {
+        double q = rnd(g), dir[3], *bp, lb;
+        const double *from = pts + 3 * (1 + (int)floor(q * (npts - 2)));
+        int k, nbp;
+        for (k = 0; k < 3; k++) {
+            double w = rnd(g);
+            dir[k] = main_[k] + (w - 0.5) * 1.6;
+        }
+        q = rnd(g);
+        lb = Lc * (0.1 + 0.25 * q);
+        nbp = walk_channel(ar, from, dir, lb, ds, PV(p, dcTort), g, &bp);
+        if (pl->nb + nbp - 1 > cap) {
+            int nc = (pl->nb + nbp - 1) * 2;
+            dseg_t *ns = (dseg_t *)ar_alloc(ar, nc * sizeof(dseg_t));
+            if (pl->nb)
+                memcpy(ns, pl->bsegs, pl->nb * sizeof(dseg_t));
+            pl->bsegs = ns;
+            cap = nc;
+        }
+        for (i = 0; i < nbp - 1; i++)
+            dseg_add(&pl->bsegs[pl->nb++], bp + 3 * i, bp + 3 * (i + 1), 0.35, Rc, r0, ds);
+    }
+    pl->rMin = INFINITY;
+    pl->rMax = 0;
+    for (i = 0; i < pl->ns + pl->nb; i++) {
+        const dseg_t *s = i < pl->ns ? &pl->segs[i] : &pl->bsegs[i - pl->ns];
+        if (s->r < pl->rMin) pl->rMin = s->r;
+        if (s->r > pl->rMax) pl->rMax = s->r;
+    }
+    for (i = 0; i < pl->ns; i++)
+        rSum += pl->segs[i].r;
+    pl->El = El;
+    pl->Rc = Rc;
+    pl->Tn = Tn;
+    pl->rMean = rSum / pl->ns;
+    pl->tFirst = pl->rMin / C_AIR;
+    pl->tLast = pl->rMax / C_AIR;
+    pl->dev = maxd(d, 0.3);
+    pl->tC = PV(p, dcCharge) > 0.05 ? PV(p, dcCharge) : 0;
+}
+
+typedef struct {
+    arena *ar;
+    const dplan_t *pl;
+    rng_t *r;
+    int len;
+    double lr;
+    float *bL[6], *bR[6];
+    double br[6];
+    int bn[6];
+} dstrike_t;
+
+/* one stroke along a list of stretches, into the distance bins or into the buffers given */
+static void dstrike(dstrike_t *st, const dseg_t *segs, const int *idx, int n, double tS, double gain, double tnS, float *bl,
+                    float *br, int blen)
+{
+    const dplan_t *pl = st->pl;
+    int i;
+    for (i = 0; i < n; i++) {
+        const dseg_t *s = &segs[idx ? idx[i] : i];
+        float *L = bl, *R = br;
+        int len = blen;
+        double q1, pk, q2, T, ts;
+        if (!L) {
+            int bi = (int)mind(5, floor(log(s->r / pl->rMin) / st->lr * 6));
+            if (!st->bL[bi]) {
+                st->bL[bi] = fnew(st->ar, st->len);
+                st->bR[bi] = fnew(st->ar, st->len);
+            }
+            L = st->bL[bi];
+            R = st->bR[bi];
+            st->br[bi] += s->r;
+            st->bn[bi]++;
+            len = st->len;
+        }
+        q1 = rnd(st->r);
+        pk = s->pk * gain * (0.6 + 0.8 * q1);
+        q2 = rnd(st->r);
+        T = pl->Tn * tnS * (0.8 + 0.45 * q2);
+        ts = s->t - pl->tFirst + tS + 0.001;
+        add_n(L, len, ts, T, pk * cos((s->pan + 1) * PI / 4));
+        add_n(R, len, ts, T, pk * sin((s->pan + 1) * PI / 4));
+    }
+}
+
+static void discharge_layers(scene_t *sc, const dplan_t *pl, const be_params *p, const gains_t *o, rng_t *r)
+{
+    static const double sg[5] = { 1, 0.7, 0.55, 0.45, 0.4 };
+    arena *ar = sc->ar;
+    double tC = pl->tC, t0 = o->t0, span = pl->tLast - pl->tFirst, tS = 0, pkMain = 0;
+    int i, b, strokes = (int)clampd(js_round(PV(p, dcStrokes)), 1, 5);
+    dstrike_t st;
+    memset(&st, 0, sizeof st);
+    st.ar = ar;
+    st.pl = pl;
+    st.r = r;
+    st.lr = log(pl->rMax / pl->rMin);
+    if (!st.lr) st.lr = 1;
+    st.len = (int)ceil((span + pl->Tn * 4 + 0.4) * FS);
+    for (i = 0; i < strokes; i++) {
+        dstrike(&st, pl->segs, 0, pl->ns, tS, sg[i], 1, 0, 0, 0);
+        if (!i)
+            dstrike(&st, pl->bsegs, 0, pl->nb, 0, 1, 0.7, 0, 0, 0);
+        tS += 0.03 + 0.05 * rnd(r);
+    }
+    for (b = 0; b < 6; b++) {
+        double pk;
+        if (!st.bL[b])
+            continue;
+        pk = peak_of(st.bL[b], st.bR[b], st.len);
+        if (pk > pkMain) pkMain = pk;
+        air_filter(st.bL[b], st.len, st.br[b] / st.bn[b]);
+        air_filter(st.bR[b], st.len, st.br[b] / st.bn[b]);
+        if (o->g1 > 0)
+            push_stereo(sc, st.bL[b], st.bR[b], st.len, t0 + tC + pl->tFirst - 0.001, o->g1);
+    }
+    push_event(sc, BE_EVENT_CRACK, t0 + tC + pl->tFirst);
+    if (PV(p, dcSustain) > 0.05 && o->g2 > 0) {
+        /* a sustained arc re-strikes along the same channel; plasma hiss follows the re-strike rate */
+        double sus = PV(p, dcSustain), rate = PV(p, dcRate), t = 0.02 + tS, pb;
+        int bn = (int)ceil((sus + span + 0.15) * FS), step = (int)ceil(pl->ns / 40.0), nsub = 0, hn, k;
+        float *bl = fnew(ar, bn), *br = fnew(ar, bn), *hs;
+        int *sub = (int *)ar_alloc(ar, pl->ns * sizeof(int));
+        for (k = 0; k < pl->ns; k++)
+            if (k % step == 0)
+                sub[nsub++] = k;
+        while (t < sus) {
+            double q = rnd(r);
+            dstrike(&st, pl->segs, sub, nsub, t, 0.5 * (1 - 0.5 * t / sus) * (0.4 + q), 0.6, bl, br, bn);
+            q = rnd(r);
+            t += (1 + 0.3 * (q - 0.5)) / rate;
+        }
+        hn = (int)ceil(sus * FS);
+        hs = fnew(ar, hn);
+        for (i = 0; i < hn; i++) {
+            double w = rnd(r) * 2 - 1;
+            hs[i] = (float)(w * (0.5 + 0.5 * fabs(fsin(0.5 * rate * i / FS))) * (1 - 0.6 * i / hn));
+        }
+        one_pole_hp(hs, hn, 2500);
+        one_pole_lp(hs, hn, 9000);
+        pb = peak_of(bl, br, bn);
+        to_peak(hs, hn, 0.2 * (pb ? pb : pkMain));
+        for (i = 0; i < hn; i++) {
+            bl[i] = (float)(bl[i] + hs[i]);
+            br[i] = (float)(br[i] + hs[i]);
+        }
+        air_filter(bl, bn, pl->rMean);
+        air_filter(br, bn, pl->rMean);
+        push_stereo(sc, bl, br, bn, t0 + tC + pl->tFirst, o->g2);
+    }
+    if (tC > 0 && o->g3 > 0) {
+        int cn;
+        float *cb = charge_whine(ar, tC, PV(p, dcChargeHz), &cn);
+        to_peak(cb, cn, 0.12 * pkMain);
+        air_filter(cb, cn, pl->dev);
+        push_mono(sc, cb, cn, t0 + pl->dev / C_AIR, 0, o->g3);
+        push_event(sc, BE_EVENT_PASS, t0 + pl->dev / C_AIR);
+    }
+    if (PV(p, dcKick) > 0.01 && o->g4 > 0) {
+        /* magnetic forces jolt the conductors, and the circuit rings down at its LC frequency */
+        int kn, rn = (int)ceil(0.7 * FS), rl;
+        float *kb = modal_hit(ar, be_material_find("steel"), 1, 0.6, r, 0, 0, 0, &kn), *rb;
+        double ring = PV(p, dcRingHz), tau = 14 / (PI * ring);
+        to_peak(kb, kn, 0.3 * pkMain * PV(p, dcKick));
+        rl = rn + 2400;
+        rb = fnew(ar, rl);
+        for (i = 0; i < rn; i++) {
+            double tt = i / FS;
+            rb[i] = (float)(exp(-tt / tau) * (fsin(ring * tt) + 0.3 * fsin(2 * ring * tt)));
+        }
+        to_peak(rb, rl, 0.2 * pkMain * PV(p, dcKick));
+        for (i = 0; i < kn && i < rl; i++)
+            rb[i] = (float)(rb[i] + kb[i]);
+        air_filter(rb, rl, pl->dev);
+        push_mono(sc, rb, rl, t0 + tC + pl->dev / C_AIR, 0, o->g4);
+    }
+}
+
+/* ------------------------------------------------------------------ destruction and implosion */
+static const be_break *break_find(const char *id)
+{
+    int i;
+    for (i = 0; i < BREAK_COUNT; i++)
+        if (!strcmp(BREAKS[i].id, id))
+            return &BREAKS[i];
+    return 0;
+}
+
+typedef struct { double t, E, v; } dhit_t;
+typedef struct { double m, h, t0, x, r, pan, sc; dhit_t hits[4]; int nh; } frag2_t;
+typedef struct { double t, E, sc, x; } crk_t;
+typedef struct {
+    frag2_t *frs;
+    int n;
+    crk_t *cracks;
+    int ncr;
+    double Tfrac, E, tEnd, tFirst, tMed, Emax, big, baseSc, scMed;
+} dsplan_t;
+
+static void sort_doubles(double *a, int n)
+{
+    int i, j;
+    for (i = 1; i < n; i++) {
+        double x = a[i];
+        for (j = i - 1; j >= 0 && a[j] > x; j--)
+            a[j + 1] = a[j];
+        a[j + 1] = x;
+    }
+}
+
+/* Break-up plan: power-law piece masses, release spread over the fracture time, free fall, bounces by restitution. */
+static void plan_destruction(arena *ar, const char *mat, double mass, double height, double pieces, double dist, double spread,
+                             rng_t *r, dsplan_t *pl)
+{
+    const be_break *d = break_find(mat);
+    int n = (int)maxd(1, js_round(pieces)), i, b, nCr;
+    double *ws = dnew(ar, n), sum = 0, g = 9.81, Tfrac, tEnd = 0, tFirst = INFINITY, Emax = 0, big = 0, bs;
+    double *lands = dnew(ar, n), *scs = dnew(ar, n);
+    for (i = 0; i < n; i++) {
+        double w = pow(rnd(r) + 0.03, -0.9);
+        ws[i] = w;
+        sum += w;
+    }
+    Tfrac = (0.04 + 0.25 * log10(1 + mass)) * (1.3 - d->brittle * 0.6);
+    pl->frs = (frag2_t *)ar_alloc(ar, n * sizeof(frag2_t));
+    for (i = 0; i < n; i++) {
+        frag2_t *f = &pl->frs[i];
+        double m = mass * 0.85 * ws[i] / sum, q1 = rnd(r), h = height * (0.15 + 0.85 * q1), q2 = rnd(r), t0 = Tfrac * pow(q2, 1.5);
+        double v = sqrt(2 * g * h), q3 = rnd(r), x = spread * (q3 * 2 - 1), rr = maxd(1, js_hypot(dist, x)), tt = t0 + v / g, vb = v;
+        f->nh = 1;
+        f->hits[0].t = tt;
+        f->hits[0].E = m * g * h;
+        f->hits[0].v = v;
+        for (b = 0; b < 3; b++) {
+            double dt;
+            vb *= d->e * (0.7 + 0.6 * rnd(r));
+            dt = 2 * vb / g;
+            if (dt < 0.03)
+                break;
+            tt += dt;
+            f->hits[f->nh].t = tt;
+            f->hits[f->nh].E = 0.5 * m * vb * vb;
+            f->hits[f->nh].v = vb;
+            f->nh++;
+        }
+        if (tt > tEnd) tEnd = tt;
+        if (f->hits[0].t < tFirst) tFirst = f->hits[0].t;
+        if (f->hits[0].E > Emax) Emax = f->hits[0].E;
+        if (m > big) big = m;
+        lands[i] = f->hits[0].t;
+        f->m = m; f->h = h; f->t0 = t0; f->x = x; f->r = rr; f->pan = x / rr * 0.9;
+        f->sc = clampd(pow(0.2 / m, 1.0 / 3), 0.25, 5);
+        scs[i] = f->sc;
+    }
+    sort_doubles(lands, n);
+    sort_doubles(scs, n);
+    nCr = (int)js_round(clampd(n * 1.5 * d->brittle + 6, 6, 160));
+    bs = clampd(pow(0.2 / mass, 1.0 / 3), 0.25, 5);
+    pl->cracks = (crk_t *)ar_alloc(ar, nCr * sizeof(crk_t));
+    for (i = 0; i < nCr; i++) {
+        crk_t *c = &pl->cracks[i];
+        double q1 = rnd(r), q2, q3, q4;
+        c->t = Tfrac * pow(q1, 2);
+        q2 = rnd(r);
+        c->E = mass * g * height * 0.002 * (0.2 + q2);
+        q3 = rnd(r);
+        c->sc = mind(6, bs * (1.5 + 3 * q3));
+        q4 = rnd(r);
+        c->x = spread * (q4 - 0.5);
+    }
+    pl->n = n;
+    pl->ncr = nCr;
+    pl->Tfrac = Tfrac;
+    pl->E = mass * g * height;
+    pl->tEnd = tEnd;
+    pl->tFirst = tFirst;
+    pl->tMed = lands[n >> 1];
+    pl->Emax = Emax;
+    pl->big = big;
+    pl->baseSc = bs;
+    pl->scMed = scs[n >> 1] ? scs[n >> 1] : 1;
+}
+
+/* Stick-slip before failure: a jittered slip train that speeds up toward the break and rings the body's modes. */
+static float *groan_buf(arena *ar, const char *type, const be_material *M, double sc, double dur, rng_t *r, int *len_out)
+{
+    int N = (int)ceil(dur * FS), tot = N + (int)ceil(0.4 * FS), k, n, K = 0, creak = !strcmp(type, "creak");
+    float *buf = fnew(ar, tot + 64);
+    double base = !strcmp(type, "groan") ? 0.5 : creak ? 0.06 : !strcmp(type, "rumble") ? 0.08 : 0.04;
+    double rate0 = !strcmp(type, "groan") ? 28 : creak ? 140 : !strcmp(type, "rumble") ? 16 : 3;
+    double c1[5], c2[5], y1[5] = { 0 }, y2[5] = { 0 }, gg[5], ph;
+    for (k = 0; k < (M->n_ratios < 5 ? M->n_ratios : 5); k++) {
+        double q = rnd(r), f = M->f0 * sc * M->ratios[k] * (1 + (q - 0.5) * 0.1), R;
+        if (f > 12000)
+            break;
+        R = pow(10, -3 / (base / (1 + 0.3 * k) * FS));
+        c1[K] = 2 * R * cos(TAU * f / FS);
+        c2[K] = R * R;
+        gg[K] = 1.0 / (1 + k);
+        K++;
+    }
+    ph = rnd(r);
+    for (n = 0; n < tot; n++) {
+        double x = 0, u = mind(1, (double)n / N), ts = n / FS, y = 0, v;
+        if (n < N) {
+            double gate = creak ? (sin(TAU * 1.3 * ts + 2 * sin(TAU * 0.37 * ts)) > -0.2 ? 1 : 0) : 1;
+            ph += rate0 * (1 + 2.5 * u * u * u) / FS;
+            if (ph >= 1) {
+                double q1 = rnd(r), q2;
+                ph -= 1 + (q1 - 0.5) * 0.3;
+                q2 = rnd(r);
+                x = gate * (0.5 + q2) * (0.25 + 0.75 * u);
+            }
+        }
+        for (k = 0; k < K; k++) {
+            v = c1[k] * y1[k] - c2[k] * y2[k] + x * gg[k];
+            y2[k] = y1[k];
+            y1[k] = v;
+            y += v;
+        }
+        buf[n] = (float)y;
+    }
+    if (!strcmp(type, "rumble")) {
+        float *nz = shaped_noise(ar, tot, r, 160, 20);
+        double pk = peak_of(buf, 0, tot + 64);
+        to_peak(nz, tot, (pk ? pk : 1) * 0.8);
+        for (n = 0; n < tot; n++) {
+            double uu = mind(1, (double)n / N);
+            buf[n] = (float)(buf[n] + nz[n] * uu * uu * (n < N ? 1 : exp(-(n - N) / FS / 0.08)));
+        }
+    }
+    *len_out = tot + 64;
+    return buf;
+}
+
+static void fragment_layers(scene_t *sc, const dsplan_t *pl, const be_material *mat, int steel, double t0, double gain,
+                            double pan, rng_t *r, const grains_t *grains)
+{
+    int i, b, len;
+    for (i = 0; i < pl->n; i++) {
+        const frag2_t *f = &pl->frs[i];
+        for (b = 0; b < f->nh; b++) {
+            const dhit_t *h = &f->hits[b];
+            double ts = clampd(pow(f->sc, -0.6), 0.25, steel ? 0.7 : 1.5) * (b ? 0.8 : 1);
+            float *hb = grains ? grain_hit(sc->ar, grains, h->E, f->sc, pl->scMed, r, &len)
+                               : modal_hit(sc->ar, mat, h->E, f->sc, r, f->m > 1 ? 6 : 4, ts, 1, &len);
+            scale(hb, len, 1 / f->r);
+            air_filter(hb, len, f->r);
+            push_mono(sc, hb, len, t0 + h->t + f->r / C_AIR, clampd(f->pan + pan, -1, 1), gain);
+        }
+    }
+}
+
+static void destruction_layers(scene_t *sc, const dsplan_t *pl, const be_params *p, const gains_t *o, rng_t *r,
+                               const grains_t *grains)
+{
+    arena *ar = sc->ar;
+    const char *matn = PS(p, dsMat);
+    const be_material *mat = be_material_find(matn);
+    const be_break *d = break_find(matn);
+    double rr = maxd(1, PV(p, dsDist)), tA = o->t0 + rr / C_AIR, trigPk = 6 * mat->eff * sqrt(pl->E * 0.25) / rr;
+    int i, k, len;
+    float *buf;
+    if (o->g1 > 0) {
+        buf = modal_hit(ar, mat, pl->E * 0.25, pl->baseSc, r, 0, 0, 0, &len);
+        scale(buf, len, 1 / rr);
+        post_layer(ar, buf, len, rr, o->ground);
+        push_mono(sc, buf, len, tA, o->pan, o->g1);
+        for (i = 0; i < pl->ncr; i++) {
+            const crk_t *c = &pl->cracks[i];
+            int cl;
+            float *cb = modal_hit(ar, mat, c->E, c->sc, r, 3, 0.4, 1, &cl);
+            double rc = js_hypot(rr, c->x);
+            scale(cb, cl, 1 / rc);
+            air_filter(cb, cl, rc);
+            push_mono(sc, cb, cl, o->t0 + c->t + rc / C_AIR, clampd(o->pan + c->x / rc * 0.9, -1, 1), o->g1);
+        }
+    }
+    push_event(sc, BE_EVENT_CRACK, tA);
+    if (o->g2 > 0 && PV(p, dsGroan) > 0.05) {
+        buf = groan_buf(ar, d->groan, mat, pl->baseSc, PV(p, dsGroan), r, &len);
+        to_peak(buf, len, trigPk * 0.2);
+        air_filter(buf, len, rr);
+        push_mono(sc, buf, len, tA - PV(p, dsGroan), o->pan, o->g2);
+        push_event(sc, BE_EVENT_PASS, tA - PV(p, dsGroan));
+    }
+    if (o->g4 > 0)
+        fragment_layers(sc, pl, mat, !strcmp(matn, "steel"), o->t0, o->g4, o->pan, r, grains);
+    push_event(sc, BE_EVENT_IMPACT, tA + pl->tFirst);
+    if (o->g3 > 0) {
+        /* fine debris scattered by each first landing */
+        for (i = 0; i < pl->n; i++) {
+            const frag2_t *f = &pl->frs[i];
+            for (k = 0; k < d->fine; k++) {
+                double q1 = rnd(r), fe = f->hits[0].E * 0.01 * (0.2 + q1), q2 = rnd(r), fsc = mind(6, f->sc * (2 + 3 * q2)), q3, q4;
+                float *fb = grains ? grain_hit(ar, grains, fe, fsc, pl->scMed, r, &len) : modal_hit(ar, mat, fe, fsc, r, 3, 0.35, 1, &len);
+                scale(fb, len, 1 / f->r);
+                air_filter(fb, len, f->r);
+                q3 = rnd(r);
+                q4 = rnd(r);
+                push_mono(sc, fb, len, o->t0 + f->hits[0].t + 0.02 + 0.33 * q3 + f->r / C_AIR,
+                          clampd(f->pan + o->pan + (q4 - 0.5) * 0.3, -1, 1), o->g3);
+            }
+        }
+        if (d->rubble) {
+            int n = (int)ceil((pl->tEnd + 1.2) * FS);
+            float *env = fnew(ar, n), *nz = shaped_noise(ar, n, r, 1400, 90);
+            double s = 0, a = exp(-1 / (0.25 * FS));
+            for (i = 0; i < pl->n; i++) {
+                int ix = (int)floor(pl->frs[i].hits[0].t * FS);
+                if (ix < n)
+                    env[ix] = (float)(env[ix] + sqrt(pl->frs[i].hits[0].E));
+            }
+            for (i = 0; i < n; i++) {
+                s = s * a + env[i];
+                nz[i] = (float)(nz[i] * s);
+            }
+            one_pole_lp(nz, n, 3000);
+            to_peak(nz, n, trigPk * 0.25);
+            air_filter(nz, n, rr);
+            push_mono(sc, nz, n, tA, o->pan, o->g3);
+        }
+    }
+}
+
+/* Rayleigh-Plesset collapse of a spherical cavity with residual gas and acoustic radiation damping. Far-field
+   pressure is rho * d/dt(R^2 dR/dt) / r. Exact for liquids; for air it is an approximation. */
+typedef struct { double R0, tc, tMin, Rmin, c, rho, r; int water, N; double *Q; } implo_t;
+
+static void plan_implosion(arena *ar, int water, double imDp, double imGas, double imR0, double imDist, implo_t *pl)
+{
+    double rho = water ? 1000 : RHO, c = water ? 1480 : C_AIR, gam = 1.4, pInf = imDp * P0, pg0 = imGas * pInf, R0 = imR0;
+    double tc = 0.915 * R0 * sqrt(rho / (pInf - pg0)), Tsim = mind(1.6, tc * 14 + 0.02);
+    int N = (int)ceil(Tsim * FS) + 2, n = 0, steps = 0;
+    double *Q = dnew(ar, N), R = R0, U = 0, t = 0, Rmin = R0, tMin = 0, dtMax = 1 / (2 * FS), uMax = (water ? 2.5 : 1.2) * c;
+    double flo = 1e-5 * R0, damp = (water ? 0.6 : 0.8) / tc;
+#define BE_ACC(Rx, Ux, res) do { double pg_ = pg0 * pow(R0 / (Rx), 3 * gam); \
+        res = ((pg_ - pInf) / rho - 1.5 * (Ux) * (Ux) - 3 * gam * pg_ * (Ux) / (rho * c)) / (Rx); } while (0)
+    while (t < Tsim && steps < 1200000) {
+        double dt = mind(dtMax, 0.004 * R / (fabs(U) + 1e-6)), a1, Rm, Um, Rn, Un, tn, a2;
+        if (dt < 1e-10) dt = 1e-10;
+        BE_ACC(R, U, a1);
+        Rm = maxd(flo, R + U * dt / 2);
+        Um = U + a1 * dt / 2;
+        Rn = maxd(flo, R + Um * dt);
+        BE_ACC(Rm, Um, a2);
+        Un = clampd((U + a2 * dt) * (1 - damp * dt), -uMax, uMax);
+        tn = t + dt;
+        while (n < N && n / FS <= tn) {
+            double f = (n / FS - t) / dt, Ri = R + (Rn - R) * f, Ui = U + (Un - U) * f;
+            Q[n++] = Ri * Ri * Ui;
+        }
+        if (Rn < Rmin) { Rmin = Rn; tMin = tn; }
+        R = Rn; U = Un; t = tn; steps++;
+    }
+#undef BE_ACC
+    for (; n < N; n++)
+        Q[n] = R * R * U;
+    pl->R0 = R0; pl->tc = tc; pl->tMin = tMin; pl->Rmin = Rmin; pl->c = c; pl->rho = rho; pl->water = water;
+    pl->N = N; pl->Q = Q; pl->r = maxd(imDist, R0 * 2);
+}
+
+static void implosion_layers(scene_t *sc, const implo_t *pl, const be_params *p, const gains_t *o, rng_t *r)
+{
+    arena *ar = sc->ar;
+    double rr = pl->r, tA = o->t0 + rr / pl->c, pk, scl, eff;
+    int n = pl->N - 1, i, len = n + 2400, cnt;
+    float *buf = fnew(ar, len);
+    const char *shell = PS(p, imShell);
+    const be_material *M;
+    for (i = 0; i < n; i++)
+        buf[i] = (float)(pl->rho * (pl->Q[i + 1] - pl->Q[i]) * FS / rr);
+    pk = peak_of(buf, 0, len);
+    if (!pk) pk = 1;
+    if (o->g1 > 0) {
+        if (pl->water) one_pole_lp(buf, len, 9000);
+        else post_layer(ar, buf, len, rr, o->ground);
+        push_mono(sc, buf, len, tA, o->pan, o->g1);
+    }
+    push_event(sc, BE_EVENT_CRACK, tA + pl->tMin);
+    if (!strcmp(shell, "none"))
+        return;
+    /* shell layers are levelled against the collapse pulse rather than measured */
+    M = be_material_find(shell);
+    scl = clampd(pow(0.15 / pl->R0, 0.8), 0.2, 4);
+    eff = 6 * M->eff;
+#define BE_PATH(b, bn) do { if (pl->water) one_pole_lp(b, bn, 9000); else air_filter(b, bn, rr); } while (0)
+    if (o->g2 > 0 && PV(p, imGroan) > 0.05) {
+        int gn;
+        float *gb = groan_buf(ar, break_find(shell)->groan, M, scl, PV(p, imGroan), r, &gn);
+        to_peak(gb, gn, pk * 0.05);
+        BE_PATH(gb, gn);
+        push_mono(sc, gb, gn, tA - PV(p, imGroan), o->pan, o->g2);
+        push_event(sc, BE_EVENT_PASS, tA - PV(p, imGroan));
+    }
+    if (o->g3 > 0) {
+        int fn;
+        double win;
+        float *fb = modal_hit(ar, M, 1, scl, r, 0, 0, 0, &fn);
+        to_peak(fb, fn, pk * 0.3);
+        BE_PATH(fb, fn);
+        push_mono(sc, fb, fn, tA, o->pan, o->g3);
+        cnt = !strcmp(shell, "steel") ? 14 : 24;
+        win = maxd(pl->tMin * 1.8, 0.02);
+        for (i = 0; i < cnt; i++) {
+            double q1 = rnd(r), q2, q3, q4;
+            int cl;
+            float *cb = modal_hit(ar, M, 1, scl * (1.2 + 2.5 * q1), r, 4, 0.5, 1, &cl);
+            q2 = rnd(r);
+            to_peak(cb, cl, pk * 0.12 * (0.3 + q2));
+            BE_PATH(cb, cl);
+            q3 = rnd(r);
+            q4 = rnd(r);
+            push_mono(sc, cb, cl, tA + win * q3, clampd(o->pan + (q4 - 0.5) * 0.6, -1, 1), o->g3);
+        }
+    }
+#undef BE_PATH
+    if (o->g4 > 0 && !pl->water) {
+        double mass = 4 * PI * pl->R0 * pl->R0 * 0.003 * break_find(shell)->shell_density, big;
+        dsplan_t dp;
+        plan_destruction(ar, shell, mass, 1, !strcmp(shell, "glass") ? 30 : 8, rr, pl->R0 * 4, r, &dp);
+        big = eff * sqrt(dp.Emax) / rr;
+        fragment_layers(sc, &dp, M, !strcmp(shell, "steel"), o->t0 + pl->tMin, o->g4 * pk * 0.15 / big, o->pan, r, 0);
+        push_event(sc, BE_EVENT_IMPACT, tA + pl->tMin + dp.tFirst);
+    }
+}
+
+/* ------------------------------------------------------------------ forcefield: a driven sheet of modes, or a plasma */
+#define FF_HUM 2.0
+#define LOOP_S 4
+#define MU0 (4e-7 * PI)
+#define MPROT 1.6726e-27
+
+enum { FF_HUMMODE, FF_IMPACT, FF_POWERUP, FF_POWERDOWN };
+typedef struct { double f, r, a, ph, lf, lp; int fam; } fmode_t;
+typedef struct {
+    double f0, top, dur, tHit, r, beat, sawT;
+    fmode_t *modes;
+    int nm, mode, plasma;
+} fplan_t;
+
+static int field_mode(const char *s)
+{
+    if (!strcmp(s, "hum")) return FF_HUMMODE;
+    if (!strcmp(s, "impact")) return FF_IMPACT;
+    if (!strcmp(s, "powerup")) return FF_POWERUP;
+    if (!strcmp(s, "powerdown")) return FF_POWERDOWN;
+    return -1;
+}
+
+static void fmk(fplan_t *pl, double f, double r, double a, int fam, rng_t *g)
+{
+    fmode_t *m = &pl->modes[pl->nm++];
+    m->f = f; m->r = r; m->a = a; m->fam = fam;
+    m->ph = rnd(g);
+    m->lf = 1 + floor(rnd(g) * 9);
+    m->lp = rnd(g);
+    if (f > pl->top)
+        pl->top = f;
+}
+
+static void plan_field(arena *ar, const be_params *p, rng_t *g, fplan_t *pl)
+{
+    int k, fam;
+    memset(pl, 0, sizeof *pl);
+    pl->mode = field_mode(PS(p, ffMode));
+    pl->plasma = !strcmp(PS(p, ffType), "plasma");
+    pl->f0 = PV(p, ffBase);
+    pl->modes = (fmode_t *)ar_alloc(ar, 40 * sizeof(fmode_t));
+    if (pl->plasma) {
+        /* Alfven speed B / sqrt(mu0 rho): pitch rises with field strength and falls with density */
+        double th, cs2, c2, sum, disc, rs[3];
+        static const double wt[3] = { 0.55, 1, 0.8 };
+        pl->f0 = clampd(PV(p, ffBase) * PV(p, ffB) * sqrt(1e19 / PV(p, ffDens)), 15, 800);
+        th = PV(p, ffAngle) * PI / 180;
+        cs2 = 5.0 / 6 * PV(p, ffBeta);
+        c2 = cos(th) * cos(th);
+        sum = 1 + cs2;
+        disc = sqrt(maxd(0, sum * sum - 4 * cs2 * c2));
+        rs[0] = sqrt(maxd(1e-4, (sum - disc) / 2));
+        rs[1] = maxd(0.02, cos(th));
+        rs[2] = sqrt((sum + disc) / 2);
+        for (fam = 0; fam < 3; fam++)
+            for (k = 1; k <= 6; k++) {
+                double q = rnd(g), f = pl->f0 * rs[fam] * k * (1 + (q - 0.5) * 0.004);
+                if (f >= 18 && f <= 9000) {
+                    double q2 = rnd(g);
+                    fmk(pl, f, rs[fam] * k, wt[fam] * (0.7 + 0.6 * q2) / pow(k, 1.2), fam, g);
+                }
+            }
+        /* surface ripple answers at half the drive frequency (Faraday waves) */
+        if (PV(p, ffSurface) > 0.01)
+            for (k = 1; k <= 10; k++) {
+                double fs = pl->f0 / 2 * k - 0.35 * pow(k, 1.5);
+                if (fs >= 18) {
+                    double q2 = rnd(g);
+                    fmk(pl, fs, k / 2.0, PV(p, ffSurface) * 0.7 * (0.7 + 0.6 * q2) / k, 3, g);
+                }
+            }
+        if (!pl->nm)
+            fmk(pl, pl->f0, 1, 1, 1, g);
+    } else {
+        const be_field *rat = 0;
+        int i;
+        for (i = 0; i < FIELD_COUNT; i++)
+            if (!strcmp(FIELDS[i].id, PS(p, ffType)))
+                rat = &FIELDS[i];
+        if (!rat)
+            rat = &FIELDS[0];
+        for (k = 0; k < rat->n; k++) {
+            double q = rnd(g), fm = pl->f0 * rat->r[k] * (1 + (q - 0.5) * 0.012), q2;
+            if (fm > 9000)
+                break;
+            q2 = rnd(g);
+            fmk(pl, fm, rat->r[k], (0.6 + 0.8 * q2) / pow(1 + k, 1.1), k ? 2 : 1, g);
+        }
+    }
+    pl->dur = pl->mode == FF_HUMMODE ? LOOP_S : pl->mode == FF_IMPACT ? 4.2 : 3.6;
+    pl->tHit = pl->mode == FF_IMPACT || pl->mode == FF_POWERDOWN ? 0.9 : 0;
+    pl->r = maxd(0.5, PV(p, ffDist));
+    pl->beat = PV(p, ffBeat);
+    pl->sawT = pl->plasma && PV(p, ffSaw) > 0.01 ? clampd(PV(p, ffSawT), 0.2, 6) : 0;
+}
+
+/* gliding tone with a sin^2 envelope; curve < 0 gives the 1/t^2 fall of a whistler */
+static void add_tone(float *mid, float *side, int ns, double t0, double len, double fA, double fB, double amp, double pan,
+                     int periodic, double curve)
+{
+    int n0 = (int)js_round(t0 * FS), n = (int)js_round(len * FS), i;
+    double ph = 0, q = sqrt(fA / fB) - 1;
+    for (i = 0; i < n; i++) {
+        double u = (double)i / n, f = curve < 0 ? fA / pow(1 + u * q, 2) : fA + (fB - fA) * pow(u, curve), e, s;
+        int idx = n0 + i;
+        ph += f / FS;
+        if (idx >= ns) {
+            if (!periodic)
+                break;
+            idx -= ns;
+        }
+        e = sin(PI * u);
+        s = amp * e * e * fsin(ph);
+        mid[idx] = (float)(mid[idx] + s);
+        side[idx] = (float)(side[idx] + s * pan);
+    }
+}
+
+/* a soliton passing the listener: sech^2 pulse, taller ones are narrower and brighter */
+static void add_soliton(float *mid, float *side, int ns, double tc, double A, double f0, double amp, int periodic, rng_t *r)
+{
+    double w = 0.09 / sqrt(A), f = f0 * (2 + 2 * A), lp = 0;
+    int n = (int)js_round(w * 8 * FS), n0 = (int)js_round((tc - 4 * w) * FS), i;
+    for (i = 0; i < n; i++) {
+        double x = (i / FS - 4 * w) / w, sech = 1 / cosh(x), q = rnd(r), s;
+        int idx = n0 + i;
+        lp += ((q * 2 - 1) - lp) * 0.12;
+        if (idx < 0) {
+            if (!periodic)
+                continue;
+            idx += ns;
+        } else if (idx >= ns) {
+            if (!periodic)
+                break;
+            idx -= ns;
+        }
+        s = amp * A * sech * sech * (0.7 * fsin(f * i / FS) + 1.6 * lp);
+        mid[idx] = (float)(mid[idx] + s);
+        side[idx] = (float)(side[idx] + s * tanh(x) * 0.8);
+    }
+}
+
+static void spark_cluster(float *mid, float *side, int ns, double t0, int count, double spread, double amp, rng_t *r)
+{
+    int k;
+    for (k = 0; k < count; k++) {
+        double q1 = rnd(r), ts = t0 + 0.001 - log(q1 + 1e-6) * spread, q2 = rnd(r), pk = amp * (0.15 + 0.85 * q2);
+        double q3 = rnd(r), T = 0.00008 + 0.00022 * q3, q4 = rnd(r), pn = (q4 * 2 - 1) * 0.7;
+        if (ts + T < ns / FS - 0.001) {
+            add_n(mid, ns, ts, T, pk);
+            add_n(side, ns, ts, T, pk * pn);
+        }
+    }
+}
+
+static double field_signal(arena *ar, const fplan_t *pl, const be_params *p, const gains_t *o, rng_t *r, int ns, int periodic,
+                           float **mid_out, float **side_out)
+{
+    double Lp = ns / FS, Ls = periodic ? Lp : 4, e = 0, pm = 0, saw = pl->sawT ? PV(p, ffSaw) : 0, Ts = pl->sawT ? pl->sawT : 1;
+    double kph = 0, td = -1, norm, fc0, *fa, *fb, *pa, *pb, *crashes;
+    int M = pl->nm, k, i, nc = 0;
+    float *mid = fnew(ar, ns), *side = fnew(ar, ns), *gA = fnew(ar, ns), *pA = fnew(ar, ns), *hz = 0;
+    if (periodic && saw)
+        Ts = Lp / maxd(1, js_round(Lp / Ts));
+    /* level and pitch envelopes first, so loop frequencies can be fitted to the average pitch */
+    for (i = 0; i < ns; i++) {
+        double t = i / FS, g = 1, pf = 1, dt;
+        int falling = pl->mode == FF_POWERDOWN && t > pl->tHit;
+        if (pl->mode == FF_IMPACT && t > pl->tHit) {
+            dt = t - pl->tHit;
+            g = 1 + 1.6 * exp(-dt / 0.12) - 0.45 * exp(-dt / 0.9) * (1 - exp(-dt / 0.15));
+            pf = 1 + 0.04 * exp(-dt / 0.25);
+        } else if (pl->mode == FF_POWERUP) {
+            g = mind(1, pow(t / 1.6, 1.5)) * (1 + 0.25 * exp(-pow((t - 1.6) / 0.25, 2)));
+            pf = 0.5 + 0.5 * (1 - exp(-t / 0.45));
+        } else if (falling) {
+            dt = t - pl->tHit;
+            if (pl->plasma) {
+                /* kink instability: a helical wobble that grows exponentially until the column disrupts */
+                double d = 0.05 * exp(dt / 0.35);
+                if (d < 1) {
+                    kph += (5 + 9 * d) / FS;
+                    g = 1 + 0.7 * d * fsin(kph);
+                    pf = 1 + 0.09 * d * fsin(kph + 0.25);
+                } else {
+                    if (td < 0) td = t;
+                    g = 1.7 * exp(-(t - td) / 0.12);
+                    pf = exp(-(t - td) / 0.3);
+                }
+            } else {
+                g = exp(-dt / 0.55);
+                pf = 0.25 + 0.75 * exp(-dt / 0.8);
+            }
+        }
+        if (saw && !falling) {
+            /* reconnection cycle: stress builds along a ramp, then the field snaps back in a few milliseconds */
+            double s = fmod(t / Ts, 1), eps = 0.004 / Ts, st = s < 1 - eps ? s : (1 - eps) * (1 - (s - (1 - eps)) / eps);
+            pf *= 1 + 0.05 * saw * (st - 0.5);
+            g *= 1 + saw * (0.3 * st - 0.2);
+        }
+        gA[i] = (float)g;
+        pA[i] = (float)pf;
+        pm += pf;
+    }
+    pm /= ns;
+    crashes = dnew(ar, (int)(Lp / Ts) + 2);
+    if (saw)
+        for (k = periodic ? 0 : 1; k * Ts < Lp - 0.06; k++)
+            if (!(pl->mode == FF_POWERDOWN && k * Ts > pl->tHit))
+                crashes[nc++] = k * Ts;
+    fa = dnew(ar, M); fb = dnew(ar, M); pa = dnew(ar, M); pb = dnew(ar, M);
+    for (k = 0; k < M; k++) {
+        double f1 = pl->modes[k].f, f2 = f1 + pl->beat * pl->modes[k].r;
+        if (periodic) {
+            f1 = js_round(f1 * pm * Lp) / (pm * Lp);
+            f2 = js_round(f2 * pm * Lp) / (pm * Lp);
+        }
+        fa[k] = f1;
+        fb[k] = f2;
+        pa[k] = pl->modes[k].ph;
+        pb[k] = pl->modes[k].ph + 0.37;
+        e += pl->modes[k].a * pl->modes[k].a;
+    }
+    norm = 1 / sqrt(e);
+    if (o->g2 > 0 && PV(p, ffCorona) > 0) {
+        float *w = fnew(ar, ns);
+        double a1 = exp(-TAU * 2500 / FS), a2 = exp(-TAU * 9000 / FS), s1 = 0, s2 = 0, eh = 0, rmsv;
+        int pass;
+        hz = fnew(ar, ns);
+        for (i = 0; i < ns; i++)
+            w[i] = (float)(rnd(r) * 2 - 1);
+        for (pass = periodic ? 0 : 1; pass < 2; pass++)
+            for (i = 0; i < ns; i++) {
+                double h;
+                s1 = w[i] + (s1 - w[i]) * a1;
+                h = w[i] - s1;
+                s2 = h + (s2 - h) * a2;
+                hz[i] = (float)s2;
+            }
+        for (i = 0; i < ns; i++)
+            eh += (double)hz[i] * hz[i];
+        rmsv = sqrt(eh / ns);
+        scale(hz, ns, 1 / (rmsv ? rmsv : 1));
+    }
+    fc0 = periodic ? js_round(fa[0] * Lp) / Lp : fa[0];
+    for (i = 0; i < ns; i++) {
+        double tt = i / FS, A = 0, Bv = 0, gg = gA[i], pp = pA[i], hum, cor;
+        for (k = 0; k < M; k++) {
+            const fmode_t *md = &pl->modes[k];
+            double sh = 1 + PV(p, ffShimmer) * 0.8 * ((double)k / M) * fsin(md->lf * tt / Ls + md->lp);
+            pa[k] += fa[k] * pp / FS;
+            pb[k] += fb[k] * pp / FS;
+            A += md->a * sh * fsin(pa[k]);
+            Bv += md->a * sh * fsin(pb[k]);
+        }
+        hum = o->g1 * FF_HUM * norm * gg;
+        /* corona hisses twice per drive cycle */
+        cor = hz ? o->g2 * PV(p, ffCorona) * 0.5 * FF_HUM * hz[i] * gg * (0.55 + 0.45 * fabs(fsin(fc0 * tt))) : 0;
+        mid[i] = (float)(hum * (A + Bv) * 0.5 + cor);
+        side[i] = (float)(hum * (A - Bv) * 0.35);
+    }
+    if (pl->plasma) {
+        double live = pl->mode == FF_POWERDOWN ? (td > 0 ? td : pl->tHit + 1) : Lp;
+        if (o->g4 > 0)
+            for (k = 0; k < nc; k++) {
+                double q = rnd(r);
+                spark_cluster(mid, side, ns, crashes[k], 6 + (int)floor(8 * q), 0.008, o->g4 * FF_HUM * 1.5 * saw, r);
+            }
+        if (o->g2 > 0 && PV(p, ffChorus) > 0.01) {
+            /* chorus: short rising tones, as whistler-mode emissions from a stressed magnetosphere */
+            int ncr = (int)js_round(PV(p, ffChorus) * live * 4);
+            for (k = 0; k < ncr; k++) {
+                double q1 = rnd(r), fA = clampd(900 * sqrt(PV(p, ffB)) * (1 + 0.6 * q1), 300, 3500), q2 = rnd(r), len = 0.12 + 0.33 * q2;
+                double q3 = rnd(r), t0 = q3 * (periodic ? Lp : maxd(0.1, live - len)), q4 = rnd(r), fB = mind(7000, fA * (1.6 + 0.8 * q4));
+                double q5 = rnd(r), amp = o->g2 * FF_HUM * 0.18 * PV(p, ffChorus) * (0.3 + 0.7 * q5), q6 = rnd(r), pan = (q6 * 2 - 1) * 0.7;
+                add_tone(mid, side, ns, t0, len, fA, fB, amp, pan, periodic, 1.3);
+            }
+        }
+        if (o->g1 > 0 && PV(p, ffSoliton) > 0.01) {
+            double sa = o->g1 * FF_HUM * 0.5 * PV(p, ffSoliton);
+            int j;
+            if (pl->mode == FF_IMPACT) {
+                /* an impact launches solitons round the field; taller ones travel faster, so the returns drift apart */
+                for (k = 0; k < 2 + js_round(PV(p, ffSoliton) * 3); k++) {
+                    double Ak = 0.4 + 0.6 * rnd(r), Tk = 0.9 / (0.6 + Ak);
+                    for (j = 1; pl->tHit + j * Tk < Lp - 0.5; j++)
+                        add_soliton(mid, side, ns, pl->tHit + j * Tk, Ak * exp(-0.35 * (j - 1)), pl->f0, sa * 1.6, 0, r);
+                }
+            } else if (pl->mode == FF_HUMMODE) {
+                for (k = 0; k < 1 + js_round(PV(p, ffSoliton) * 2); k++) {
+                    double Ah = 0.5 + 0.5 * rnd(r), off;
+                    int np = 2 + (int)js_round(Ah * 3) + k;
+                    off = rnd(r);
+                    for (j = 0; j < np; j++)
+                        add_soliton(mid, side, ns, (j + off) * Lp / np, Ah, pl->f0, sa, periodic, r);
+                }
+            }
+        }
+    }
+    *mid_out = mid;
+    *side_out = side;
+    return td;
+}
+
+static int dbl_cmp(const void *a, const void *b)
+{
+    double x = *(const double *)a, y = *(const double *)b;
+    return x < y ? -1 : x > y;
+}
+
+static void field_layers(scene_t *sc, const fplan_t *pl, const be_params *p, const gains_t *o, rng_t *r)
+{
+    arena *ar = sc->ar;
+    int ns = (int)ceil(pl->dur * FS), i, k, fi = (int)js_round(0.15 * FS), fo = (int)js_round(0.3 * FS);
+    double rr = pl->r, tA = o->t0 + rr / C_AIR, td, E, hit, tEv;
+    float *mid, *side, *L = fnew(ar, ns), *R = fnew(ar, ns);
+    td = field_signal(ar, pl, p, o, r, ns, 0, &mid, &side);
+    for (i = 0; i < ns; i++) {
+        double fd = mind(mind(1, (double)i / fi), (double)(ns - i) / fo);
+        L[i] = (float)((mid[i] + side[i]) / rr * fd);
+        R[i] = (float)((mid[i] - side[i]) / rr * fd);
+    }
+    air_filter(L, ns, rr);
+    air_filter(R, ns, rr);
+    push_stereo(sc, L, R, ns, tA, 1);
+    E = pl->mode == FF_IMPACT ? PV(p, ffHitE) : pl->mode == FF_POWERUP ? 100 : 30;
+    hit = FF_HUM * pow(E, 0.25);
+    tEv = pl->plasma && pl->mode == FF_POWERDOWN && td > 0 ? td : pl->tHit;
+    if (pl->mode == FF_IMPACT && o->g3 > 0) {
+        /* struck sheet: stretched modes start sharp and settle, the higher ones bloom late like a gong */
+        int rn = (int)ceil(3.2 * FS), nf = 0, nk;
+        float *rb = fnew(ar, rn + 64);
+        double beta = PV(p, ffGlide) * 0.7, last = pl->top, fl[80], fk[80], ph[80] = { 0 }, en[80], at[80], dd[80], da[80], gl = 1, gd;
+        for (k = 0; k < pl->nm; k++)
+            fl[nf++] = pl->modes[k].f;
+        for (k = 1; nf < 18 && last + k * 0.55 * pl->f0 < 9000; k++)
+            fl[nf++] = last + k * 0.55 * pl->f0;
+        qsort(fl, nf, sizeof(double), dbl_cmp);
+        nk = 0;
+        if (nf > 22) {
+            for (k = 0; k < nf; k++)
+                if (k % 2 == 0 || k < 6)
+                    fk[nk++] = fl[k];
+        } else {
+            for (k = 0; k < nf; k++)
+                fk[nk++] = fl[k];
+        }
+        for (k = 0; k < nk; k++) {
+            en[k] = 1;
+            at[k] = 1;
+            dd[k] = exp(-6.9 / (2.5 / (1 + 0.25 * k) * FS));
+            da[k] = exp(-1 / ((0.004 + 0.03 * k * PV(p, ffGlide)) * FS));
+        }
+        gd = exp(-1 / (0.22 * FS));
+        for (i = 0; i < rn; i++) {
+            double pf = sqrt(1 + beta * gl), y = 0;
+            gl *= gd;
+            for (k = 0; k < nk; k++) {
+                ph[k] += fk[k] * pf / FS;
+                en[k] *= dd[k];
+                at[k] *= da[k];
+                y += fsin(ph[k]) * en[k] * (1 - at[k]) / pow(1 + k, 0.6);
+            }
+            rb[i] = (float)y;
+        }
+        to_peak(rb, rn + 64, 0.6 * hit / rr);
+        air_filter(rb, rn + 64, rr);
+        push_mono(sc, rb, rn + 64, tA + pl->tHit, o->pan, o->g3);
+    }
+    if (o->g4 > 0) {
+        int cn = (int)ceil(2.2 * FS), disrupt = pl->plasma && pl->mode == FF_POWERDOWN;
+        int cnt = pl->mode == FF_IMPACT ? 34 : pl->mode == FF_POWERUP ? 18 : pl->mode == FF_POWERDOWN ? 26 : 0;
+        if (cnt) {
+            float *cm = fnew(ar, cn), *cs = fnew(ar, cn), *cl, *cr;
+            if (pl->mode != FF_POWERDOWN || disrupt)
+                add_n(cm, cn, 0.001, 0.00025, 1.2 * hit);
+            spark_cluster(cm, cs, cn, 0.001, cnt, pl->mode == FF_POWERDOWN && !disrupt ? 0.4 : 0.05, 0.5 * hit, r);
+            if (disrupt) {
+                /* the disruption dumps the stored field energy: a low thud under the sparks */
+                double tp = 0;
+                int nn = (int)js_round(0.5 * FS);
+                for (i = 0; i < nn; i++) {
+                    double tq = i / FS;
+                    tp += (30 + 70 * exp(-tq / 0.06)) / FS;
+                    cm[i] = (float)(cm[i] + 2.2 * FF_HUM * fsin(tp) * exp(-tq / 0.16) * (1 - exp(-tq / 0.003)));
+                }
+            }
+            if (pl->plasma && pl->mode == FF_IMPACT) {
+                /* each spark sends a whistler: dispersion makes the highs arrive first, so the tone falls */
+                for (k = 0; k < 3 + floor(3 * rnd(r)); k++) {
+                    double q1 = rnd(r), q2 = rnd(r), q3 = rnd(r), q4 = rnd(r), q5 = rnd(r), q6 = rnd(r);
+                    add_tone(cm, cs, cn, 0.15 + 0.5 * q1, 0.8 + 0.6 * q2, 5000 + 2000 * q3, 300 + 200 * q4,
+                             0.12 * hit * (0.5 + 0.5 * q5), (q6 * 2 - 1) * 0.7, 0, -1);
+                }
+            }
+            cl = fnew(ar, cn);
+            cr = fnew(ar, cn);
+            for (i = 0; i < cn; i++) {
+                cl[i] = (float)((cm[i] + cs[i]) / rr);
+                cr[i] = (float)((cm[i] - cs[i]) / rr);
+            }
+            air_filter(cl, cn, rr);
+            air_filter(cr, cn, rr);
+            push_stereo(sc, cl, cr, cn, tA + tEv, o->g4);
+        }
+    }
+    if (pl->mode != FF_HUMMODE)
+        push_event(sc, pl->mode == FF_IMPACT ? BE_EVENT_IMPACT : BE_EVENT_LAUNCH, tA + tEv);
+}
+
 /* ------------------------------------------------------------------ projectile */
 static int launch_of(const char *s)
 {
@@ -2253,6 +3276,10 @@ typedef struct {
     xplan_t pay;
     xplan_t ex;
     weapon_t wp;
+    dplan_t dc;
+    implo_t im;
+    dsplan_t ds;
+    fplan_t ff;
 } plan_t;
 
 static void proj_layers(scene_t *sc, plan_t *pl, const be_params *p, const gains_t *o, rng_t *r)
@@ -2318,6 +3345,10 @@ static int kind_of(const char *k)
     if (!strcmp(k, "projectile")) return 0;
     if (!strcmp(k, "explosion")) return 1;
     if (!strcmp(k, "blaster")) return 2;
+    if (!strcmp(k, "discharge")) return 3;
+    if (!strcmp(k, "implosion")) return 4;
+    if (!strcmp(k, "destruction")) return 5;
+    if (!strcmp(k, "field")) return 6;
     return -1;
 }
 
@@ -2351,7 +3382,15 @@ static void plan_rep(arena *ar, const be_params *p, int seed, int k, plan_t *out
             PV(&out->q, bpStiff) = PV(p, bpStiff) * (1 + j * 0.3 * (b2 - 0.5));
             b3 = rnd(&g);
             PV(&out->q, bvSpeed) = PV(p, bvSpeed) * (1 + j * 0.1 * (b3 - 0.5));
-        } else
+        } else if (kind == 3)
+            PV(&out->q, dcDist) = PV(p, dcDist) * a;
+        else if (kind == 4)
+            PV(&out->q, imDist) = PV(p, imDist) * a;
+        else if (kind == 5)
+            PV(&out->q, dsDist) = PV(p, dsDist) * a;
+        else if (kind == 6)
+            PV(&out->q, ffDist) = PV(p, ffDist) * a;
+        else
             PV(&out->q, miss) = PV(p, miss) * a;
         if (kind != 0)
             pan = j * 1.4 * (rnd(&g) - 0.5);
@@ -2363,6 +3402,16 @@ static void plan_rep(arena *ar, const be_params *p, int seed, int k, plan_t *out
                        (int)js_round(PV(&out->q, exDebris)), &g, &out->ex);
     else if (kind == 2)
         plan_weapon(ar, &out->q, &g, &out->wp);
+    else if (kind == 3)
+        plan_discharge(ar, &out->q, &g, &out->dc);
+    else if (kind == 4)
+        plan_implosion(ar, !strcmp(PS(&out->q, imMedium), "water"), PV(&out->q, imDp), PV(&out->q, imGas), PV(&out->q, imR0),
+                       PV(&out->q, imDist), &out->im);
+    else if (kind == 6)
+        plan_field(ar, &out->q, &g, &out->ff);
+    else if (kind == 5)
+        plan_destruction(ar, PS(&out->q, dsMat), PV(&out->q, dsMass), PV(&out->q, dsHeight), PV(&out->q, dsPieces),
+                         PV(&out->q, dsDist), PV(&out->q, dsSpread), &g, &out->ds);
     else {
         proj_from(&out->q, &out->pp);
         analyze_proj(ar, &out->pp, &out->an);
@@ -2389,7 +3438,8 @@ static void mix_scene(scene_t *sc, const be_params *p, int seed, mix_t *out)
     grains_t bank, *grains = 0;
     if (!env)
         env = be_env_find("none");
-    if (kind_of(PS(p, kind)) == 1 && !strcmp(PS(p, exSurface), "rec")) {
+    if ((kind_of(PS(p, kind)) == 1 && !strcmp(PS(p, exSurface), "rec")) ||
+        (kind_of(PS(p, kind)) == 5 && !strcmp(PS(p, dsDebris), "rec"))) {
         float *gL, *gR;
         int gn;
         make_gravel(ar, &gL, &gR, &gn);          /* the only recording this engine has: check() made sure */
@@ -2416,6 +3466,14 @@ static void mix_scene(scene_t *sc, const be_params *p, int seed, mix_t *out)
             explosion_layers(sc, &pl->ex, &xo, &r);
         } else if (pl->kind == 2)
             weapon_layers(sc, &pl->wp, &pl->q, &o, &r);
+        else if (pl->kind == 3)
+            discharge_layers(sc, &pl->dc, &pl->q, &o, &r);
+        else if (pl->kind == 4)
+            implosion_layers(sc, &pl->im, &pl->q, &o, &r);
+        else if (pl->kind == 5)
+            destruction_layers(sc, &pl->ds, &pl->q, &o, &r, grains);
+        else if (pl->kind == 6)
+            field_layers(sc, &pl->ff, &pl->q, &o, &r);
         else
             proj_layers(sc, pl, &pl->q, &o, &r);
         tOff += interval * (1 + PV(p, seqJitter) * (rnd(&trnd) - 0.5));
@@ -2507,6 +3565,25 @@ static int check(const be_params *p)
             return BE_ERR_VALUE;
         if (launcher_of(PS(p, lnType)) == LN_LINE && strcmp(PS(p, bpBody), "none") && !body_find(PS(p, bpBody)))
             return BE_ERR_VALUE;
+    } else if (kind_of(PS(p, kind)) == 6) {
+        if (field_mode(PS(p, ffMode)) < 0 || !(PV(p, ffDens) > 0))
+            return BE_ERR_VALUE;
+    } else if (kind_of(PS(p, kind)) == 4) {
+        const char *sh = PS(p, imShell);
+        if (strcmp(sh, "none") && (!break_find(sh) || !(break_find(sh)->shell_density > 0)))
+            return BE_ERR_VALUE;
+        if (!(PV(p, imR0) > 0) || !(PV(p, imDp) > 0) || !(PV(p, imGas) >= 0) || !(PV(p, imGas) < 1))
+            return BE_ERR_VALUE;
+    } else if (kind_of(PS(p, kind)) == 5) {
+        if (!strcmp(PS(p, dsMat), "measured"))
+            return BE_ERR_UNSUPPORTED;                  /* its modes are measured from a recording */
+        if (!break_find(PS(p, dsMat)) || !(PV(p, dsMass) > 0))
+            return BE_ERR_VALUE;
+        if (!strcmp(PS(p, dsDebris), "rec") && strcmp(PS(p, grAsset), "ex:gravel"))
+            return BE_ERR_UNSUPPORTED;
+    } else if (kind_of(PS(p, kind)) == 3) {
+        if (!(PV(p, dcEnergy) > 0) || !(PV(p, dcLength) > 0) || !(PV(p, dcDist) >= 0))
+            return BE_ERR_VALUE;
     } else {
         if (!(PV(p, exW) > 0) || !(PV(p, exDist) > 0))
             return BE_ERR_VALUE;
@@ -2540,13 +3617,68 @@ static void sort_events(be_event *e, int n)       /* stable, as Array.prototype.
     }
 }
 
+int be_is_loop(const be_params *p)
+{
+    return p && kind_of(PS(p, kind)) == 6 && !strcmp(PS(p, ffMode), "hum");
+}
+
+/* A filter applied to one period of a loop must itself come out periodic: run it over two, keep the second. */
+static float *periodic_post(arena *ar, const float *x, int n, double r, double ground)
+{
+    float *t = fnew(ar, 2 * n);
+    memcpy(t, x, (size_t)n * sizeof(float));
+    memcpy(t + n, x, (size_t)n * sizeof(float));
+    post_layer(ar, t, 2 * n, r, ground);
+    return t + n;
+}
+
+/* a seamless loop: one period, its filters and its room wrapped round the seam */
+static void render_loop(arena *ar, const be_params *p, int seed, mix_t *out)
+{
+    plan_t *pl = (plan_t *)ar_alloc(ar, sizeof *pl);
+    rng_t r = rng_new((double)seed + 5);
+    int Np = LOOP_S * FSI, i;
+    gains_t o;
+    float *mid, *side, *L = fnew(ar, Np), *R = fnew(ar, Np);
+    double rr;
+    const be_env *env = be_env_find(PS(p, env));
+    plan_rep(ar, p, seed, 0, pl);
+    o = scene_gains(p);
+    field_signal(ar, &pl->ff, p, &o, &r, Np, 1, &mid, &side);
+    rr = pl->ff.r;
+    for (i = 0; i < Np; i++) {
+        L[i] = (float)((mid[i] + side[i]) / rr);
+        R[i] = (float)((mid[i] - side[i]) / rr);
+    }
+    L = periodic_post(ar, L, Np, rr, PV(p, ground));
+    R = periodic_post(ar, R, Np, rr, PV(p, ground));
+    out->peakPa = peak_of(L, R, Np);
+    if (!env)
+        env = be_env_find("none");
+    if (env->rt60) {
+        fdn_opt fo;
+        float *tL = tile3(ar, L, Np), *tR = tile3(ar, R, Np), *wL, *wR;
+        double wg = db_to_lin(env->wet);
+        env_fdn_opt(env, &fo);
+        fdn(ar, tL, tR, 3 * Np, &fo, &wL, &wR);
+        for (i = 0; i < Np; i++) {
+            L[i] = (float)(L[i] + wL[2 * Np + i] * wg);
+            R[i] = (float)(R[i] + wR[2 * Np + i] * wg);
+        }
+    }
+    out->L = L;
+    out->R = R;
+    out->N = Np;
+    out->tStart = 0;
+}
+
 int be_render(const be_params *p, int seed, be_sound *out)
 {
     arena ar;
     scene_t sc;
     mix_t mx;
     double pk;
-    int st, n, i, ne = 0;
+    int st, n, i, ne = 0, loop = be_is_loop(p);
     memset(out, 0, sizeof *out);
     if (!p)
         return BE_ERR_VALUE;
@@ -2561,13 +3693,16 @@ int be_render(const be_params *p, int seed, be_sound *out)
     }
     memset(&sc, 0, sizeof sc);
     sc.ar = &ar;
-    mix_scene(&sc, p, seed, &mx);
+    if (loop)
+        render_loop(&ar, p, seed, &mx);
+    else
+        mix_scene(&sc, p, seed, &mx);
     pk = peak_of(mx.L, mx.R, mx.N);
     if (!pk)
         pk = 1;
     scale(mx.L, mx.N, 1 / pk);
     scale(mx.R, mx.N, 1 / pk);
-    n = trim_tail(mx.L, mx.R, mx.N);
+    n = loop ? mx.N : trim_tail(mx.L, mx.R, mx.N);
     out->L = (float *)malloc((size_t)(n ? n : 1) * sizeof(float));
     out->R = (float *)malloc((size_t)(n ? n : 1) * sizeof(float));
     out->events = (be_event *)malloc((size_t)(sc.n_ev ? sc.n_ev : 1) * sizeof(be_event));
@@ -2704,23 +3839,29 @@ static void limiter(arena *ar, float *L, float *R, int N, double ceil_)
     }
 }
 
-static void normalize(float *L, float *R, int N, double target)
+static const double TAIL_DELAYS[8] = { 61, 89, 127, 173, 229, 283, 349, 419 };
+
+static void norm_to(float *L, float *R, int N, int a0, int b0, double target)
 {
-    double pk = peak_of(L, R, N);
+    double pk = 0, v;
+    int q;
+    for (q = a0; q < b0 && q < N; q++) {
+        v = fabs(L[q]); if (v > pk) pk = v;
+        v = fabs(R[q]); if (v > pk) pk = v;
+    }
     if (pk > 0) {
         scale(L, N, target / pk);
         scale(R, N, target / pk);
     }
 }
 
-static const double TAIL_DELAYS[8] = { 61, 89, 127, 173, 229, 283, 349, 419 };
-
-int be_finish(be_sound *s, const char *preset, const char *const *keys, const double *values, int nk)
+/* a loop is processed as three periods and the middle one kept, so every stage sees a steady state */
+static int finish(be_sound *s, const char *preset, const char *const *keys, const double *values, int nk, int loop)
 {
     double a[A_COUNT], slow, sigPk;
     arena ar;
     float *L, *R;
-    int N, n, i, j, non;
+    int N, n, i, j, non, a0;
     volatile int pad = 0;
     onset_t on[5];
     if (!s || !s->L)
@@ -2750,18 +3891,23 @@ int be_finish(be_sound *s, const char *preset, const char *const *keys, const do
         return BE_ERR_MEMORY;
     }
     slow = clampd(a[A_slowmo] ? a[A_slowmo] : 1, 1, 4);
-    if (slow > 1.01) {
-        L = stretch(&ar, s->L, s->n, slow, &N);
-        R = stretch(&ar, s->R, s->n, slow, &N);
-    } else {
-        slow = 1;
-        N = s->n;
-        L = fcopy(&ar, s->L, N);
-        R = fcopy(&ar, s->R, N);
+    {
+        const float *sL = loop ? tile3(&ar, s->L, s->n) : s->L, *sR = loop ? tile3(&ar, s->R, s->n) : s->R;
+        int sn = loop ? 3 * s->n : s->n;
+        if (slow > 1.01) {
+            L = stretch(&ar, sL, sn, slow, &N);
+            R = stretch(&ar, sR, sn, slow, &N);
+        } else {
+            slow = 1;
+            N = sn;
+            L = fcopy(&ar, sL, N);
+            R = fcopy(&ar, sR, N);
+        }
     }
-    if (N > 24 * FSI)
+    a0 = loop ? (int)js_round(s->n * slow) : 0;
+    if (!loop && N > 24 * FSI)
         N = 24 * FSI;
-    if (a[A_tail] > 0) {
+    if (a[A_tail] > 0 && !loop) {
         int extra = (int)mind(24 * FSI + 4 * FSI - N, js_round((1 + a[A_tail] * 3) * FS));
         float *nl = fnew(&ar, N + extra), *nr = fnew(&ar, N + extra);
         memcpy(nl, L, (size_t)N * sizeof(float));
@@ -2788,7 +3934,7 @@ int be_finish(be_sound *s, const char *preset, const char *const *keys, const do
             }
         }
     }
-    normalize(L, R, N, 1);
+    norm_to(L, R, N, a0, loop ? 2 * a0 : N, 1);
     if (a[A_drive] > 0) {
         double dg = 1 + 7 * a[A_drive], bias = 0.12 * a[A_drive], tb = tanh(bias), tn = tanh(dg);
         for (n = 0; n < N; n++) {
@@ -2820,7 +3966,7 @@ int be_finish(be_sound *s, const char *preset, const char *const *keys, const do
             R[n] = (float)(R[n] + wR[n] * wg);
         }
     }
-    if (a[A_swell] > 0) {
+    if (a[A_swell] > 0 && !loop) {
         int anchor = non ? on[0].n : 0, Ls, exN, start;
         float *xl, *xr, *wL, *wR, *sL, *sR;
         fdn_opt fo;
@@ -2884,13 +4030,19 @@ int be_finish(be_sound *s, const char *preset, const char *const *keys, const do
             R[n] = (float)(m - sd);
         }
     }
-    normalize(L, R, N, 1);
+    norm_to(L, R, N, a0, loop ? 2 * a0 : N, 1);
     if (a[A_loud] > 0) {
         compress(L, R, N, a[A_loud]);
-        normalize(L, R, N, db_to_lin(7 * a[A_loud]));
+        norm_to(L, R, N, a0, loop ? 2 * a0 : N, db_to_lin(7 * a[A_loud]));
     }
     limiter(&ar, L, R, N, 0.89);
-    n = trim_tail(L, R, N);
+    if (loop) {
+        n = a0;
+        L += a0;
+        R += a0;
+        s->n_events = 0;
+    } else
+        n = trim_tail(L, R, N);
     {
         float *nl = (float *)malloc((size_t)(n ? n : 1) * sizeof(float)), *nr = (float *)malloc((size_t)(n ? n : 1) * sizeof(float));
         if (!nl || !nr) {
@@ -2910,6 +4062,16 @@ int be_finish(be_sound *s, const char *preset, const char *const *keys, const do
         s->events[i].t = s->events[i].t * slow + pad / FS;
     ar_free(&ar);
     return BE_OK;
+}
+
+int be_finish(be_sound *s, const char *preset, const char *const *keys, const double *values, int nk)
+{
+    return finish(s, preset, keys, values, nk, 0);
+}
+
+int be_finish_loop(be_sound *s, const char *preset, const char *const *keys, const double *values, int nk)
+{
+    return finish(s, preset, keys, values, nk, 1);
 }
 
 /* ------------------------------------------------------------------ small things */

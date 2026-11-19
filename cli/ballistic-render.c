@@ -118,7 +118,7 @@ int main(int argc, char **argv)
     t0 = now();
     if ((st = be_render(p, seed, &s)))
         return fail("render", st);
-    if ((action || na) && (st = be_finish(&s, action, akeys, avals, na)))
+    if ((action || na) && (st = (be_is_loop(p) ? be_finish_loop : be_finish)(&s, action, akeys, avals, na)))
         return fail("action", st);
     t1 = now();
     if (length > 0)

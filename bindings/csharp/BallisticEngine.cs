@@ -60,6 +60,8 @@ namespace EigenSoundLab.Ballistic
         [DllImport(Lib)] internal static extern int be_params_set_text(IntPtr p, byte[] key, byte[] value);
         [DllImport(Lib)] internal static extern int be_render(IntPtr p, int seed, ref Sound s);
         [DllImport(Lib)] internal static extern int be_finish(ref Sound s, byte[] preset, IntPtr[] keys, double[] values, int n);
+        [DllImport(Lib)] internal static extern int be_finish_loop(ref Sound s, byte[] preset, IntPtr[] keys, double[] values, int n);
+        [DllImport(Lib)] internal static extern int be_is_loop(IntPtr p);
         [DllImport(Lib)] internal static extern void be_sound_free(ref Sound s);
         [DllImport(Lib)] internal static extern int be_kind_supported(byte[] kind);
         [DllImport(Lib)] internal static extern int be_preset_supported(int i);
@@ -96,6 +98,8 @@ namespace EigenSoundLab.Ballistic
         public BallisticEvent[] Events;
         /// <summary>The loudest point at the listener before normalising, in dB SPL.</summary>
         public double Spl;
+        /// <summary>A seamless loop (a field's hum): play it looping.</summary>
+        public bool Loop;
 
         public int Length => Left.Length;
         public double Seconds => (double)Left.Length / Rate;
@@ -181,9 +185,12 @@ namespace EigenSoundLab.Ballistic
                     else Native.Check(Native.be_params_set(p, Native.Z(key), Convert.ToDouble(value)), key);
                 }
                 Native.Check(Native.be_render(p, seed, ref s), preset ?? "render");
-                if (action != null) Native.Check(Native.be_finish(ref s, Native.Z(action), null, null, 0), action);
+                bool loop = Native.be_is_loop(p) != 0;
+                if (action != null)
+                    Native.Check(loop ? Native.be_finish_loop(ref s, Native.Z(action), null, null, 0)
+                                      : Native.be_finish(ref s, Native.Z(action), null, null, 0), action);
                 var sound = new BallisticSound { Left = new float[s.n], Right = new float[s.n], Spl = s.spl,
-                                                 Events = new BallisticEvent[s.n_events] };
+                                                 Events = new BallisticEvent[s.n_events], Loop = loop };
                 Marshal.Copy(s.L, sound.Left, 0, s.n);
                 Marshal.Copy(s.R, sound.Right, 0, s.n);
                 int size = Marshal.SizeOf(typeof(Native.Event));

@@ -36,6 +36,12 @@ const EXTRA = [                                   // the parameters games change
   ['plasmabolt', { D: 3, miss: 0.8, bvTone: 1100, bvSizzle: 0.9, targetDist: 0, tgMat: 'none', env: 'indoor' }],
   ['nailgun', { lnType: 'none', bvSpeed: 12, bvCal: 45, tgThick: 80, tgSize: 0.8, tgEnergy: 40, targetDist: 0.05 }],
   ['railgun', { tgMat: 'aluminium', D: 50, seqCount: 2 }],
+  ['tesla', { seqCount: 2, seqJitter: 0.3 }],
+  ['spark', { dcEnergy: 2, dcLength: 0.05, dcDist: 3, dcCharge: 0.9, dcChargeHz: 6000, dcSustain: 0.2 }],
+  ['tube', { imDist: 3, imGroan: 0, seqCount: 2 }],
+  ['crate', { dsMass: 3, dsHeight: 0.3, dsPieces: 6, seqCount: 2 }],
+  ['shielddown', { seqCount: 2, ffDist: 2 }],
+  ['plasma', { ffDist: 5, env: 'urban' }],
 ];
 
 const ctx = {};

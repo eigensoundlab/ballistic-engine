@@ -14,7 +14,10 @@ static class Program
         if (s.Length != 24000 || s.Events[0].Kind != BallisticEventKind.Launch) return 1;
         var rail = Ballistic.Render("railgun", 2, null, ("D", 50));
         Console.WriteLine($"railgun: {rail.Seconds:0.000} s, {rail.Events.Length} events");
-        try { Ballistic.Render("tesla"); return 1; }
+        var hum = Ballistic.Render("shield", 1, "game");
+        Console.WriteLine($"shield: {hum.Seconds:0.000} s, loop {hum.Loop}");
+        if (!hum.Loop || hum.Length != 4 * 48000) return 1;
+        try { Ballistic.Render("quad"); return 1; }
         catch (BallisticException e) { Console.WriteLine("as it should: " + e.Message); }
         return 0;
     }

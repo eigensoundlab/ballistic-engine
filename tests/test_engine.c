@@ -57,17 +57,22 @@ static void every_preset(void)
         CHECK(s.rate == 48000 && s.n > 4800 && s.n < 24 * 48000, "%s: %d samples", be_preset_id(i), s.n);
         CHECK(finite_all(&s), "%s: no NaN or infinity", be_preset_id(i));
         CHECK(fabs(peak(&s) - 1) < 1e-6, "%s: peak 1, not %g", be_preset_id(i), peak(&s));
-        CHECK(s.n_events >= 1 && s.peak_pa > 0 && s.spl > 30, "%s: events and level", be_preset_id(i));
+        CHECK((be_is_loop(p) ? s.n_events == 0 && s.n == 4 * 48000 : s.n_events >= 1) && s.peak_pa > 0 && s.spl > 30,
+              "%s: events and level", be_preset_id(i));
         {
             int k;
             for (k = 1; k < s.n_events; k++)
                 CHECK(s.events[k].t >= s.events[k - 1].t, "%s: events in time", be_preset_id(i));
         }
-        CHECK(be_finish(&s, "game", 0, 0, 0) == BE_OK && finite_all(&s) && peak(&s) <= 0.8901,
-              "%s: game finishing, peak %g", be_preset_id(i), peak(&s));
+        if (be_is_loop(p))
+            CHECK(be_finish_loop(&s, "game", 0, 0, 0) == BE_OK && s.n == 4 * 48000 && finite_all(&s) && peak(&s) <= 0.8901,
+                  "%s: a loop finished stays a loop, peak %g", be_preset_id(i), peak(&s));
+        else
+            CHECK(be_finish(&s, "game", 0, 0, 0) == BE_OK && finite_all(&s) && peak(&s) <= 0.8901,
+                  "%s: game finishing, peak %g", be_preset_id(i), peak(&s));
         be_sound_free(&s);
     }
-    CHECK(rendered >= 32, "%d presets rendered", rendered);
+    CHECK(rendered >= 59, "%d presets rendered", rendered);
     printf("%d presets render, %d wait for later versions\n", rendered, later);
     be_params_free(p);
 }
@@ -107,7 +112,7 @@ static void params(void)
     be_params_preset(q, "pistol");
     be_params_set_text(q, "target", "cheese");
     CHECK(be_render(q, 1, &s) == BE_ERR_VALUE, "an unknown target material");
-    be_params_preset(q, "tesla");
+    be_params_preset(q, "quad");
     CHECK(be_render(q, 1, &s) == BE_ERR_KIND, "a kind not ported yet");
     be_params_preset(q, "pistol");
     be_params_set_text(q, "env", "ir");
@@ -116,7 +121,14 @@ static void params(void)
     CHECK(be_render(q, 1, &s) == BE_OK, "an unknown room is no room, as in Ballistic");
     be_sound_free(&s);
     CHECK(be_kind_supported("projectile") && be_kind_supported("explosion") && be_kind_supported("blaster") &&
-          !be_kind_supported("rotor"), "kinds");
+          be_kind_supported("discharge") && be_kind_supported("implosion") && be_kind_supported("destruction") &&
+          be_kind_supported("field") && !be_kind_supported("rotor") && !be_kind_supported("rocket"), "kinds");
+    be_params_preset(q, "shield");
+    CHECK(be_is_loop(q), "a field's hum is a loop");
+    be_params_preset(q, "shielddown");
+    CHECK(!be_is_loop(q), "its collapse is not");
+    be_params_preset(q, "potdrop");
+    CHECK(be_check(q) == BE_ERR_UNSUPPORTED, "a measured material needs a recording");
     be_params_preset(q, "railgun");
     CHECK(be_check(q) == BE_OK, "a rail gun checks");
     be_params_set_text(q, "lnType", "catapult");

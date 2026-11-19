@@ -548,6 +548,19 @@ static const be_ablation ABLATION[ABLATION_COUNT] = {
   { "concrete", 0.2, 0.25, "concrete" },
   { "water", 0.45, 0.9, 0 },
 };
+#define BREAK_COUNT 4
+static const be_break BREAKS[BREAK_COUNT] = {
+  { "glass", 0.25, 1.0, "tick", 3, 0, 2500.0 },
+  { "wood", 0.35, 0.35, "creak", 1, 0, 0.0 },
+  { "concrete", 0.15, 0.6, "rumble", 2, 1, 0.0 },
+  { "steel", 0.45, 0.15, "groan", 1, 0, 7800.0 },
+};
+#define FIELD_COUNT 3
+static const be_field FIELDS[FIELD_COUNT] = {
+  { "membrane", 20, { 1.0, 1.594, 2.136, 2.296, 2.653, 2.918, 3.156, 3.501, 3.6, 4.06, 4.6, 5.1, 5.54, 6.1, 6.75, 7.4, 8.3, 9.2, 10.4, 11.9 } },
+  { "plate", 9, { 1.0, 2.3, 3.9, 5.4, 6.3, 8.2, 9.6, 11.4, 13.1 } },
+  { "harmonic", 12, { 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0 } },
+};
 
 /* fsin: Math.sin(TAU * i / 8192) as a Float32Array holds it */
 static const float SINT[8192] = {

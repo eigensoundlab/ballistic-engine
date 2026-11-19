@@ -7,8 +7,9 @@ is checked against it on every change.
 
 - **C99, no dependencies** beyond the C library and libm. One header, two source files.
 - **Thread-safe**, no global state: render a pool of takes on worker threads while a level loads.
-- **5 to 14 times faster** than the JavaScript engine on V8 (below).
-- **32 of Ballistic's presets** so far: projectiles, explosions and blasters; the other kinds follow.
+- **5 to 18 times faster** than the JavaScript engine on V8 (below).
+- **59 of Ballistic's 83 presets** so far: every kind but rockets and rotors, and the presets that need a
+  recording.
 - **Bindings**: Python (ctypes, `bindings/python`), C# for Unity and .NET (`bindings/csharp`).
 - **Apache-2.0**, as Ballistic.
 
@@ -19,11 +20,15 @@ is checked against it on every change.
 | Projectile: muzzle blast, N-wave crack, wake with Doppler, ricochet tumble, impacts on steel, wood, dirt, concrete, glass; explosive payloads | rifle, ear, burst, pistol, sniper, tank, mortar, arrow, ricochet, swing, flyover | ported, conforms |
 | Explosion: blast, rumble, ground shock, fragments, debris (modal or gravel grains) | charge, fragstorm, bigblast, gravelblast, barrage | ported, conforms |
 | Blaster: dispersive-line, rail, coil and gas launchers; plasma bolts, beams and pulsed beams, slugs with plasma sheath; targets that ablate, ring with bending waves (steel, aluminium, glass, ice, wood), splash and crackle (water), shatter (concrete), sizzle and tick as they cool | pew, pewecho, pulse, cannon, wire, plasmabolt, plasmarifle, laser, pulselaser, railgun, raildown, coilslug, nailgun, thundersheet, icesheet, boltwater | ported, conforms |
-| Discharge, field, implosion, destruction, rocket, rotor | 44 presets | next: `be_render` answers `BE_ERR_KIND` |
-| Recording, recorded rooms, events triggered by a recording | 7 presets (with knockfire) | needs your recordings: `BE_ERR_UNSUPPORTED` |
+| Discharge: thunder from a crooked channel (Few), branches, return strokes, sustained arcs, charger whine, coil kick | arcgun, coilgun, tesla, stun, spark, lightning, closestrike | ported, conforms |
+| Implosion: Rayleigh-Plesset collapse in air or water, shell stress, fracture and falling pieces | tube, vactank, bubble, hull | ported, conforms |
+| Destruction: pieces by a power law, free fall, bounces, stick-slip creaks and groans, rubble | window, crate, wall, wallgravel, gantry | ported, conforms |
+| Forcefield: a sheet of modes or a plasma (MHD waves, reconnection, chorus, solitons, kink disruption); hums as seamless loops | shield, shieldhit, shieldup, shielddown, reactor, barrier, plasma, plasmahit, kink, tokamak, chorus | ported, conforms |
+| Rocket, rotor | 14 presets | next: `be_render` answers `BE_ERR_KIND` |
+| Recording, measured materials, recorded rooms, events triggered by a recording | 10 presets | need your recordings: `BE_ERR_UNSUPPORTED` |
 
 Ballistic's finishing for action (`"game"`, `"block"`, `"slow"`, `"far"`: punch, weight, drive, bite, tail, swell,
-width, loudness) is ported too: `be_finish`.
+width, loudness) is ported too: `be_finish`, and `be_finish_loop` for a loop (`be_is_loop`), which it keeps seamless.
 
 `ballistic-render --list` shows every preset and whether this version renders it; `be_preset_supported(i)` and
 `be_check(params)` say the same to a program.
@@ -31,8 +36,8 @@ width, loudness) is ported too: `be_finish`.
 ## Conformance
 
 `tests/conformance.mjs` renders every supported preset, plus the variations games use most, with four seeds, as
-physics and with the game finishing, in both engines, and compares every sample: 344 sounds, the largest difference
-2e-5 (the sounds peak at 1), from rounding in the maths libraries. Lengths and event times match exactly. The port
+physics and with the game finishing, in both engines, and compares every sample: 608 sounds, the largest difference
+4e-5 (the sounds peak at 1), from rounding in the maths libraries. Lengths and event times match exactly. The port
 keeps the JavaScript's order of operations, random draws, `Math.round` and `Math.hypot`, and builds with
 `-ffp-contract=off`, so that fused multiply-adds do not change the rounding on ARM.
 
@@ -59,6 +64,13 @@ One take, rendered on one core of a small cloud machine (2 cores, Node 22 for th
 | coilslug | 128.5 ms | 17.1 ms | 8x |
 | nailgun | 56.8 ms | 7.6 ms | 7x |
 | icesheet | 628.5 ms | 75.5 ms | 8x |
+| tesla (discharge) | 54.1 ms | 8.3 ms | 7x |
+| spark | 11.4 ms | 2.5 ms | 5x |
+| tube (implosion) | 131.3 ms | 17.9 ms | 7x |
+| crate (destruction) | 111.0 ms | 15.3 ms | 7x |
+| shielddown (field) | 863.0 ms | 47.1 ms | 18x |
+| shield (field, a 4 s loop) | 921.6 ms | 57.1 ms | 16x |
+| lightning (1 km, mountain valley) | 205.9 ms | 170.6 ms | 1.2x: 25 s of a valley's reverb |
 
 Most of a long sound's time is its room (the reverb runs over the whole tail); `env: "none"` or `"indoor"` is cheaper
 than `"valley"`. A game renders a handful of takes per sound when it loads and plays them in turn, rather than

@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.3.0 - 2026-11-19
+
+- **Discharge**: thunder from a crooked channel split into stretches (Few), branches, return strokes, sustained arcs
+  with plasma hiss, charger whine, coil kick and LC ring. Presets arcgun, coilgun, tesla, stun, spark, lightning,
+  closestrike.
+- **Implosion**: Rayleigh-Plesset collapse of a cavity in air or water, the shell's groan before it fails, its
+  fracture and the pieces falling. Presets tube, vactank, bubble, hull.
+- **Destruction**: pieces by a power law, free fall and bounces by restitution, cracks, stick-slip creaks and groans
+  before the break, fine debris, concrete rubble, gravel grains. Presets window, crate, wall, wallgravel, gantry
+  (potshatter, potdrop and knockglass need a recording).
+- **Forcefield**: a driven sheet of modes, or a reduced plasma model - shear, fast and slow waves, reconnection
+  crashes, chorus, solitons, kink disruption - with impact, power-up and collapse. Hums render as seamless 4 s loops,
+  their filters and room wrapped round the seam: `be_is_loop()`, and `be_finish_loop()` finishes a loop as a loop.
+  Presets shield, shieldhit, shieldup, shielddown, reactor, barrier, plasma, plasmahit, kink, tokamak, chorus.
+- 59 of Ballistic's 83 presets render; rockets and rotors are next. Conformance: 608 sounds, largest difference 4e-5.
+- Releases: GitHub Actions builds the library for Linux (x64, arm64), macOS (universal), Windows (x64, arm64) and
+  Android (three ABIs) on every version tag, with a Unity package.
+- Python binding: `Sound.loop`; C#: `BallisticSound.Loop`.
+
 ## 0.2.0 - 2026-11-19
 
 - **Blaster**: the weapon chain. Launchers: a struck dispersive line with echoes, thump and body (can, tube, plate),

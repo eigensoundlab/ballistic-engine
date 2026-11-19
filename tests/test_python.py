@@ -46,17 +46,25 @@ class BindingTests(unittest.TestCase):
         with self.assertRaisesRegex(be.BallisticError, "Dee: no parameter of that name"):
             be.render("pistol", Dee=1)
         with self.assertRaisesRegex(be.BallisticError, "cannot render that kind"):
-            be.render("tesla")
+            be.render("quad")
         with self.assertRaisesRegex(be.BallisticError, "oomph"):
             be.render("pistol", action="game", finish={"oomph": 1})
         listed = {p[0]: p for p in be.presets()}
         self.assertTrue(listed["pistol"][3])
         self.assertEqual(listed["charge"][2], "explosion")
-        self.assertFalse(listed["tesla"][3])
+        self.assertTrue(listed["tesla"][3])
+        self.assertFalse(listed["quad"][3])
         self.assertTrue(listed["railgun"][3])
         self.assertFalse(listed["knockfire"][3])                 # needs a recording
         self.assertEqual(be.keys()["env"], "word")
-        self.assertEqual(be.load().version, "0.2.0")
+        self.assertEqual(be.load().version, "0.3.0")
+
+    def test_loops_stay_loops(self):
+        s = be.render("shield", seed=2, action="game")
+        self.assertTrue(s.loop)
+        self.assertEqual(s.n, 4 * 48000)
+        self.assertEqual(s.events, [])
+        self.assertFalse(be.render("shielddown", seed=2).loop)
 
 
 if __name__ == "__main__":
