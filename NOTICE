@@ -1,0 +1,8 @@
+Ballistic Engine
+Copyright 2026 Daniel Sandner (https://orcid.org/0000-0002-1041-814X)
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+It is a port of the sound engine of Ballistic Foley Lab
+(https://github.com/eigensoundlab/ballistic), by the same author and under the
+same licence; reference/engine.js is a copy of that engine.

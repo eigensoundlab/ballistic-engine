@@ -1,0 +1,54 @@
+# SPDX-License-Identifier: Apache-2.0
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, cc: gcc }
+          - { os: ubuntu-latest, cc: clang }
+          - { os: macos-latest, cc: clang }
+          - { os: windows-latest, cc: msvc }
+    runs-on: ${{ matrix.os }}
+    name: ${{ matrix.os }} (${{ matrix.cc }})
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build
+        shell: bash
+        run: |
+          if [ "${{ matrix.cc }}" != msvc ]; then export CC=${{ matrix.cc }}; fi
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --config Release -j 4
+      - name: C tests
+        run: ctest --test-dir build -C Release --output-on-failure
+      - name: Tables match the reference engine
+        if: matrix.os == 'ubuntu-latest' && matrix.cc == 'gcc'
+        run: node tools/gen_tables.mjs --check
+      - name: Sample for sample against the JavaScript engine
+        shell: bash
+        run: |
+          bin=build/ballistic-render
+          if [ -f build/Release/ballistic-render.exe ]; then bin=build/Release/ballistic-render.exe; fi
+          node tests/conformance.mjs "$bin"
+      - name: Python binding
+        run: python -m unittest tests.test_python -v
+      - uses: actions/setup-dotnet@v4
+        if: matrix.os == 'ubuntu-latest' && matrix.cc == 'gcc'
+        with:
+          dotnet-version: "8.0.x"
+      - name: C# binding
+        if: matrix.os == 'ubuntu-latest' && matrix.cc == 'gcc'
+        run: LD_LIBRARY_PATH=$PWD/build dotnet run --project tests/csharp/smoke.csproj

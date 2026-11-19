@@ -1,0 +1,7 @@
+build/
+__pycache__/
+*.pyc
+*.wav
+*.raw
+tests/csharp/bin/
+tests/csharp/obj/
