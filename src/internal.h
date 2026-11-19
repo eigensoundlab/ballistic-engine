@@ -5,7 +5,7 @@
 
 #include "ballistic.h"
 
-#define BE_VERSION "0.3.0"
+#define BE_VERSION "0.4.0"
 #define BE_REFERENCE "Ballistic Foley Lab engine.js 0.1.0 (45a3f91)"
 #define BE_TEXT_MAX 32
 

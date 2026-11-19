@@ -1762,7 +1762,10 @@ static void plan_channel(arena *ar, double L, double El, double D, double miss, 
     out->ds = ds;
 }
 
-static void traj_kin(arena *ar, double dur, double D, double miss, double v, traj_t *tr)
+typedef double (*xfn_t)(const void *st, double t);
+static double x_linear(const void *st, double t) { return *(const double *)st * t; }
+
+static void traj_kin_fn(arena *ar, double dur, double D, double miss, xfn_t xf, const void *st, traj_t *tr)
 {
     int n = (int)js_round(dur * TRAJ_HZ) + 1, i;
     tr->x = dnew(ar, n);
@@ -1770,7 +1773,7 @@ static void traj_kin(arena *ar, double dur, double D, double miss, double v, tra
     tr->T = dnew(ar, n);
     for (i = 0; i < n; i++) {
         double t = i / TRAJ_HZ;
-        tr->x[i] = v * t;
+        tr->x[i] = xf(st, t);
         tr->T[i] = t + js_hypot(D - tr->x[i], miss) / C_AIR;
         tr->v[i] = i ? (tr->x[i] - tr->x[i - 1]) * TRAJ_HZ : 0;
     }
@@ -1779,6 +1782,11 @@ static void traj_kin(arena *ar, double dur, double D, double miss, double v, tra
     tr->n = n;
     tr->hit = 0;
     tr->xEnd = 0;
+}
+
+static void traj_kin(arena *ar, double dur, double D, double miss, double v, traj_t *tr)
+{
+    traj_kin_fn(ar, dur, D, miss, x_linear, &v, tr);
 }
 
 static void plan_bolt(arena *ar, const be_params *q, rng_t *r, bolt_t *out)
@@ -1829,9 +1837,10 @@ static void plan_bolt(arena *ar, const be_params *q, rng_t *r, bolt_t *out)
 }
 
 /* a sustained source on a path: synthesised in emission time, then re-timed to the ear */
-typedef double (*gen_fn)(void *st, int k);
+typedef double (*gen_fn)(void *st, int k, int i, double f, double x, double r);
 
-static int moving_source(arena *ar, const traj_t *tr, double D, double miss, gen_fn gen, void *st, stereo_t *out)
+static int moving_source(arena *ar, const traj_t *tr, double D, double miss, gen_fn gen, void *st, int hasPan, double fixedPan,
+                         stereo_t *out)
 {
     int n = tr->n, ns = (int)floor((n - 1) / TRAJ_HZ * FS), k, i;
     double l1 = 0, l2 = 0;
@@ -1847,17 +1856,17 @@ static int moving_source(arena *ar, const traj_t *tr, double D, double miss, gen
         dT = (tr->T[i + 1] - tr->T[i]) * TRAJ_HZ;
         rate = 1 / maxd(fabs(dT), 0.05);
         rr = maxd(1, js_hypot(D - x, miss));
-        s = gen(st, k) / rr;
+        s = gen(st, k, i, f, x, rr) / rr;
         a = exp(-TAU * clampd(mind(air_fc(rr), 18000) / rate / 0.64, 30, 20000) / FS);
         l1 = s + (l1 - s) * a;
         l2 = l1 + (l2 - l1) * a;
         src[k] = (float)l2;
     }
-    return retime(ar, src, ns, tr, D, miss, 0, 0, out);
+    return retime(ar, src, ns, tr, D, miss, hasPan, fixedPan, out);
 }
 
 typedef struct { rng_t *r; double lp0, sh; } sheath_st;
-static double sheath_gen(void *v, int k)
+static double sheath_gen(void *v, int k, int i_, double f_, double x_, double r_)
 {
     sheath_st *s = (sheath_st *)v;
     double w = rnd(s->r) * 2 - 1;
@@ -1866,7 +1875,7 @@ static double sheath_gen(void *v, int k)
 }
 
 typedef struct { rng_t *r; double ph, lp, ck, hum, sizzle; } voice_st;
-static double voice_gen(void *v, int kk)
+static double voice_gen(void *v, int kk, int i_, double f_, double x_, double r_)
 {
     voice_st *s = (voice_st *)v;
     double w;
@@ -1909,7 +1918,7 @@ static void bolt_layers(scene_t *sc, bolt_t *bo, const be_params *p, double gB, 
         if (sh > 0.01) {
             sheath_st st;
             st.r = r; st.lp0 = 0; st.sh = sh;
-            if (moving_source(ar, &a->tr, fp->D, fp->miss, sheath_gen, &st, &mv))
+            if (moving_source(ar, &a->tr, fp->D, fp->miss, sheath_gen, &st, 0, 0, &mv))
                 push_stereo(sc, mv.L, mv.R, mv.n, t0 + mv.t, gB);
         }
         return;
@@ -1978,7 +1987,7 @@ static void bolt_layers(scene_t *sc, bolt_t *bo, const be_params *p, double gB, 
             voice_st st;
             stereo_t mv;
             st.r = r; st.ph = 0; st.lp = 0; st.ck = 0; st.hum = PV(p, bvTone); st.sizzle = PV(p, bvSizzle);
-            if (moving_source(ar, &bo->tr, PV(p, D), PV(p, miss), voice_gen, &st, &mv))
+            if (moving_source(ar, &bo->tr, PV(p, D), PV(p, miss), voice_gen, &st, 0, 0, &mv))
                 push_stereo(sc, mv.L, mv.R, mv.n, t0 + mv.t, gB);
         }
     }
@@ -3244,6 +3253,614 @@ static void field_layers(scene_t *sc, const fplan_t *pl, const be_params *p, con
         push_event(sc, pl->mode == FF_IMPACT ? BE_EVENT_IMPACT : BE_EVENT_LAUNCH, tA + tEv);
 }
 
+/* ------------------------------------------------------------------ jets and rockets */
+/* Jet mixing noise: broad hump around the Strouhal peak, about 6 dB per octave either side. Unit rms. */
+static float *jet_noise(arena *ar, int n, double fpk, rng_t *r, int periodic)
+{
+    float *w = fnew(ar, n), *out = fnew(ar, n);
+    double a1 = exp(-TAU * mind(fpk * 1.5, 16000) / FS), a2 = exp(-TAU * fpk * 0.5 / FS), lp = 0, hp = 0, e = 0, rm;
+    int i, pass;
+    for (i = 0; i < n; i++)
+        w[i] = (float)(rnd(r) * 2 - 1);
+    for (pass = periodic ? 0 : 1; pass < 2; pass++)
+        for (i = 0; i < n; i++) {
+            lp = w[i] + (lp - w[i]) * a1;
+            hp = lp + (hp - lp) * a2;
+            out[i] = (float)(lp - hp);
+        }
+    for (i = 0; i < n; i++)
+        e += (double)out[i] * out[i];
+    rm = sqrt(e / n);
+    scale(out, n, 1 / (rm ? rm : 1));
+    return out;
+}
+
+/* Crackle of a supersonic exhaust: sparse, steep, positive-skewed pressure spikes. Unit rms. */
+static float *crackle_noise(arena *ar, int n, double fpk, rng_t *r, int periodic)
+{
+    double fx = clampd(6 * fpk, 900, 5000), dec = exp(-TAU * fx / FS), rate = 0.25 * fx / FS, s = 0, h = 0;
+    double a = exp(-TAU * fx / 4 / FS), e = 0, rm;
+    float *imp = fnew(ar, n), *out = fnew(ar, n);
+    int i, pass;
+    for (i = 0; i < n; i++)
+        if (rnd(r) < rate)
+            imp[i] = (float)(-log(rnd(r) + 1e-9));
+    for (pass = periodic ? 0 : 1; pass < 2; pass++)
+        for (i = 0; i < n; i++) {
+            s = s * dec + imp[i];
+            h = s + (h - s) * a;
+            out[i] = (float)(s - h);
+        }
+    for (i = 0; i < n; i++)
+        e += (double)out[i] * out[i];
+    rm = sqrt(e / n);
+    scale(out, n, 1 / (rm ? rm : 1));
+    return out;
+}
+
+enum { RK_LAUNCH, RK_FLYBY, RK_LANDING, RK_STATIC };
+typedef struct {
+    traj_t tr;
+    float *th;
+    int hit, iBurn, iCut;
+    double vTd, vmax, mEnd;
+} rtraj_t;
+
+typedef struct {
+    int mode, vertical, hasTarget;
+    double F, Ue, m0, burn, v0, dia, D, miss, targetDist, ramp, maxT;
+} thrust_t;
+
+/* Path from thrust, mass and drag: launch from rest, fly-by at constant speed, landing with a braking burn. */
+static void traj_thrust(arena *ar, const thrust_t *q, rtraj_t *out)
+{
+    double dt = 1 / TRAJ_HZ, A = PI * q->dia * q->dia / 4, mdot = q->F / q->Ue, m = q->m0, mMin = 0.2 * q->m0;
+    double g = q->vertical ? 9.81 : 0, x = 0, v = 0, thr = 0, vTd = 0, xStop = INFINITY, vmax = 0, vT = 1.5, t;
+    int maxN = (int)js_round(TRAJ_HZ * q->maxT), n = 0, hit = 0, i, iBurn = -1, iCut = -1, post = -1, burning = 0;
+    double *xs = dnew(ar, maxN + 1), *vs = dnew(ar, maxN + 1), *T = dnew(ar, maxN + 1);
+    float *th = fnew(ar, maxN + 2);
+    /* a fly-by is trimmed to about four seconds of approach and five of departure */
+    if (q->mode == RK_FLYBY) {
+        v = q->v0;
+        thr = 1;
+        xStop = q->D + mind(clampd(25 * q->miss, 30, 2000), q->v0 * 5);
+        x = maxd(0, q->D - q->v0 * 4);
+        iBurn = 0;
+    }
+    if (q->mode == RK_LANDING)
+        v = q->v0;
+    for (i = 0; i <= maxN; i++) {
+        t = i * dt;
+        if (q->mode == RK_LAUNCH) {
+            if (iBurn < 0) iBurn = 0;
+            if (t < q->burn && m > mMin)
+                thr = mind(1, t / q->ramp);
+            else {
+                if (iCut < 0) iCut = i;
+                thr = maxd(0, thr - dt / 0.06);
+            }
+        } else if (q->mode == RK_LANDING) {
+            if (post >= 0)
+                thr = maxd(0, thr - dt / 0.25);
+            else {
+                /* braking burn: throttle to the deceleration that reaches touchdown speed exactly at the pad */
+                double aReq = maxd(0, v * v - vT * vT) / (2 * maxd(q->D - x, 0.05)), aMax = maxd(0.5, q->F / m - g);
+                if (!burning && aReq >= 0.85 * aMax) { burning = 1; iBurn = i; }
+                if (burning) {
+                    double want = clampd(m * (aReq + g) / q->F, 0.12, 1);
+                    thr += clampd(want - thr, -dt / q->ramp, dt / q->ramp);
+                }
+            }
+        }
+        xs[i] = x; vs[i] = v; th[i] = (float)thr; T[i] = t + js_hypot(q->D - x, q->miss) / C_AIR; n = i + 1;
+        if (v > vmax) vmax = v;
+        if (post >= 0) {
+            if (++post > 0.4 * TRAJ_HZ) break;
+            continue;
+        }
+        if (q->mode == RK_LANDING) {
+            if (x >= q->D) { hit = 1; vTd = v; post = 0; x = q->D; v = 0; if (iCut < 0) iCut = i; continue; }
+            if (burning) {
+                v += (g - q->F * thr / m) * dt;
+                if (v < vT) v = vT;
+                m = maxd(mMin, m - mdot * thr * dt);
+            }
+            x += v * dt;
+            if (x > q->D) x = q->D;
+        } else if (q->mode == RK_FLYBY) {
+            if (q->hasTarget && x >= q->targetDist) { hit = 1; vTd = v; break; }
+            if (x >= xStop) break;
+            x += v * dt;
+        } else {
+            double a;
+            if (q->hasTarget && x >= q->targetDist) { hit = 1; vTd = v; break; }
+            if (iCut >= 0 && thr <= 0 && !q->hasTarget) break;
+            a = (q->F * thr - 0.5 * RHO * 0.35 * A * v * v) / m - g;
+            if (x <= 0 && a < 0) { a = 0; v = 0; }
+            v += a * dt;
+            x += v * dt;
+            if (x < 0) { x = 0; v = 0; }
+            m = maxd(mMin, m - mdot * thr * dt);
+            if (iCut >= 0 && q->hasTarget && v < 5) break;
+        }
+    }
+    th[n] = th[n - 1];
+    out->tr.n = n; out->tr.x = xs; out->tr.v = vs; out->tr.T = T; out->tr.hit = hit; out->tr.xEnd = 0;
+    out->th = th; out->hit = hit; out->iBurn = iBurn > 0 ? iBurn : 0; out->iCut = iCut; out->vTd = vTd; out->vmax = vmax; out->mEnd = m;
+}
+
+static int shock_from(const traj_t *tr, double miss, double d, double lenRatio, crack_t *c)
+{
+    int n = tr->n, iMin = 0, i;
+    double M, len, b, m2;
+    for (i = 1; i < n; i++)
+        if (tr->T[i] < tr->T[iMin])
+            iMin = i;
+    if (!(iMin > 0 && iMin < n - 1 && tr->v[iMin] > C_AIR * 1.01))
+        return 0;
+    M = tr->v[iMin] / C_AIR; len = d * lenRatio; b = maxd(miss, 0.2); m2 = M * M - 1;
+    c->t = tr->T[iMin]; c->x = tr->x[iMin]; c->M = M; c->tau = iMin / TRAJ_HZ;
+    c->peak = 0.53 * P0 * pow(m2, 0.125) * d / (pow(b, 0.75) * pow(len, 0.25));
+    c->dur = 1.82 * M * pow(b, 0.25) * d / (C_AIR * pow(m2, 0.375) * pow(len, 0.25));
+    return 1;
+}
+
+typedef struct {
+    int mode, vert, has_crack, has_hit, has_pay, passed;
+    double F, Ue, De, Mj, p1, fpk, crk, r, r0, passT, passV;
+    rtraj_t rt;
+    crack_t crack;
+    hit_t hit;
+    xplan_t pay;
+} rkplan_t;
+
+static int rocket_mode(const char *s)
+{
+    if (!strcmp(s, "launch")) return RK_LAUNCH;
+    if (!strcmp(s, "flyby")) return RK_FLYBY;
+    if (!strcmp(s, "landing")) return RK_LANDING;
+    if (!strcmp(s, "static")) return RK_STATIC;
+    return -1;
+}
+
+/* Acoustic output from mechanical jet power: efficiency rises steeply with exhaust Mach number, levels near 0.5 % */
+static void plan_rocket(arena *ar, const be_params *p, rng_t *g, rkplan_t *out)
+{
+    double F = PV(p, rkThrust), Ue = PV(p, rkUe), De = PV(p, rkNozzle), Mj = Ue / C_AIR, eta, Pm, Wa;
+    thrust_t q;
+    int i;
+    memset(out, 0, sizeof *out);
+    out->mode = rocket_mode(PS(p, rkMode));
+    out->vert = !strcmp(PS(p, rkPath), "vertical");
+    eta = mind(0.005, 1e-4 * pow(Mj, 5));
+    Pm = 0.5 * F * Ue;
+    Wa = eta * Pm;
+    out->F = F; out->Ue = Ue; out->De = De; out->Mj = Mj;
+    out->p1 = sqrt(Wa * RHO * C_AIR / (4 * PI));
+    out->fpk = clampd(clampd(0.2 / Mj, 0.03, 0.2) * Ue / De, 25, 9000);
+    out->crk = PV(p, rkCrackle) * clampd((Mj - 1.2) / 1.5, 0, 1);
+    if (out->mode == RK_STATIC) {
+        out->r = maxd(PV(p, miss), 1);
+        return;
+    }
+    memset(&q, 0, sizeof q);
+    q.mode = out->mode; q.F = F; q.Ue = Ue; q.m0 = PV(p, rkMass); q.burn = PV(p, rkBurn); q.v0 = PV(p, rkV0); q.dia = De * 1.4;
+    q.D = PV(p, D); q.miss = PV(p, miss); q.vertical = out->vert;
+    q.hasTarget = out->mode != RK_LANDING && strcmp(PS(p, target), "none");
+    q.targetDist = PV(p, targetDist);
+    q.ramp = clampd(0.02 + 0.08 * sqrt(De), 0.02, 0.6);
+    q.maxT = out->mode == RK_LAUNCH ? mind(14, PV(p, rkBurn) + (q.hasTarget ? 8 : 0.5)) : 14;
+    traj_thrust(ar, &q, &out->rt);
+    {
+        const traj_t *tr = &out->rt.tr;
+        int iPass = tr->n - 1;
+        for (i = 0; i < tr->n; i++)
+            if (tr->x[i] >= q.D) { iPass = i; break; }
+        out->passed = tr->x[tr->n - 1] >= q.D;
+        out->passT = tr->T[iPass];
+        out->passV = tr->v[iPass];
+    }
+    out->r0 = js_hypot(q.D, q.miss);
+    out->has_crack = shock_from(&out->rt.tr, q.miss, De * 1.4, 8, &out->crack);
+    if (out->rt.hit) {
+        const traj_t *tr = &out->rt.tr;
+        double xh = tr->x[tr->n - 1], tau = (tr->n - 1) / TRAJ_HZ, rh = maxd(0.5, js_hypot(q.D - xh, q.miss));
+        if (out->mode == RK_LANDING)
+            for (i = 0; i < tr->n; i++)
+                if (tr->x[i] >= q.D) { tau = i / TRAJ_HZ; break; }
+        out->has_hit = 1;
+        out->hit.tau = tau; out->hit.t = tau + rh / C_AIR; out->hit.x = xh; out->hit.v = out->rt.vTd; out->hit.r = rh;
+        out->hit.E = 0.5 * out->rt.mEnd * out->rt.vTd * out->rt.vTd;
+        if (out->mode != RK_LANDING && PV(p, payload) >= 0.01) {
+            out->has_pay = 1;
+            plan_explosion(ar, PV(p, payload), rh, (int)js_round(PV(p, exFrags)), (int)js_round(PV(p, exDebris)), g, &out->pay);
+        }
+    }
+}
+
+static float *ignition_buf(arena *ar, const rkplan_t *rk, rng_t *r, double sign, int *len_out)
+{
+    double td = clampd(rk->De / C_AIR * 4, 0.0006, 0.04), fw = clampd(0.5 * rk->fpk, 20, 220);
+    int n = (int)ceil((td * 10 + 4 / fw + 0.05) * FS), len = n + 2400, i, nn;
+    float *buf = fnew(ar, len), *nb;
+    shape_t s = { 0 };
+    s.A = sign * 2.5 * rk->p1; s.T = td; s.k = 1;
+    add_shape(buf, len, 0.0005, td * 9, &s);
+    for (i = 0; i < n; i++) {
+        double t = i / FS;
+        buf[i] = (float)(buf[i] + sign * 1.5 * rk->p1 * sin(TAU * fw * t) * exp(-t * fw / 1.5) * (1 - exp(-t / 0.002)));
+    }
+    nn = (int)js_round(0.04 * FS);
+    nb = shaped_noise(ar, nn, r, 2500, 60);
+    for (i = 0; i < nn; i++)
+        nb[i] = (float)(nb[i] * exp(-i / FS / 0.012));
+    to_peak(nb, nn, 0.8 * rk->p1);
+    for (i = 0; i < nn; i++)
+        buf[i] = (float)(buf[i] + nb[i]);
+    *len_out = len;
+    return buf;
+}
+
+typedef struct {
+    const rkplan_t *rk;
+    const be_params *p;
+    const gains_t *o;
+    rng_t *r;
+    const float *nz, *ck;
+    double exS, fch, cph, wph, rough, fw;
+} exhaust_st;
+
+static double exhaust_gen(void *v, int k, int i, double f, double x, double rr)
+{
+    exhaust_st *e = (exhaust_st *)v;
+    const rkplan_t *rk = e->rk;
+    const be_params *p = e->p;
+    double thr = e->rk->rt.th[i] + (e->rk->rt.th[i + 1] - e->rk->rt.th[i]) * f, dir, h, ge, s, wh, q;
+    if (thr <= 0.0005)
+        return 0;
+    /* loudest about 45 degrees off the exhaust axis */
+    dir = db_to_lin(6 * (e->exS * (PV(p, D) - x) / rr * 0.697 + PV(p, miss) / rr * 0.717) - 3);
+    h = rk->vert ? (rk->mode == RK_LANDING ? PV(p, D) - x : x) : 1e9;
+    ge = 1 + exp(-maxd(0, h) / (6 * rk->De));
+    q = rnd(e->r);
+    e->rough += ((q * 2 - 1) - e->rough) * 0.0008;
+    e->cph += TAU * e->fch / FS;
+    e->wph += TAU * e->fw * (0.6 + 0.4 * thr) / FS;
+    s = (e->nz[k] * (1 - 0.5 * rk->crk) + (e->ck ? e->ck[k] * rk->crk : 0)) * (1 + 9 * e->rough) *
+        (1 + 0.6 * PV(p, rkChug) * sin(e->cph + 30 * e->rough));
+    wh = PV(p, rkWhine) > 0 ? PV(p, rkWhine) * 0.35 * thr * (sin(e->wph) + 0.5 * sin(2 * e->wph + 1) + 0.4 * sin(1.37 * e->wph)) : 0;
+    return rk->p1 * dir * (e->o->g1 * s * sqrt(thr) * ge + e->o->g3 * wh);
+}
+
+static double rk_pan(const rkplan_t *rk, const be_params *p, double x, double r)
+{
+    return rk->vert || r < 0.01 ? 0 : (x - PV(p, D)) / r * 0.9;
+}
+
+static void rocket_layers(scene_t *sc, rkplan_t *rk, const be_params *p, const gains_t *o, rng_t *r)
+{
+    arena *ar = sc->ar;
+    const traj_t *tr = &rk->rt.tr;
+    double t0 = o->t0, D = PV(p, D), miss = PV(p, miss), ground = PV(p, ground);
+    int ns = (int)floor((tr->n - 1) / TRAJ_HZ * FS), len;
+    float *buf;
+    if (ns >= 64 && (o->g1 > 0 || o->g3 > 0)) {
+        exhaust_st st;
+        stereo_t wk;
+        memset(&st, 0, sizeof st);
+        st.rk = rk; st.p = p; st.o = o; st.r = r;
+        st.nz = jet_noise(ar, ns, rk->fpk, r, 0);
+        st.ck = rk->crk > 0 ? crackle_noise(ar, ns, rk->fpk, r, 0) : 0;
+        st.exS = rk->mode == RK_LANDING ? 1 : -1;
+        st.fch = clampd(60 / sqrt(rk->De), 25, 400);
+        st.fw = PV(p, rkWhineHz);
+        if (moving_source(ar, tr, D, miss, exhaust_gen, &st, rk->vert, 0, &wk))
+            push_stereo(sc, wk.L, wk.R, wk.n, t0 + wk.t, 1);
+    }
+    if (rk->mode != RK_FLYBY) {
+        double xi = tr->x[rk->rt.iBurn], ri = maxd(1, js_hypot(D - xi, miss)), ti = t0 + tr->T[rk->rt.iBurn];
+        if (o->g2 > 0) {
+            buf = ignition_buf(ar, rk, r, 1, &len);
+            scale(buf, len, 1 / ri);
+            post_layer(ar, buf, len, ri, ground);
+            push_mono(sc, buf, len, ti, rk_pan(rk, p, xi, ri), o->g2);
+        }
+        push_event(sc, BE_EVENT_LAUNCH, ti);
+        if (rk->mode == RK_LAUNCH && rk->rt.iCut >= 0 && rk->rt.iCut < tr->n) {
+            double xc = tr->x[rk->rt.iCut], rc = maxd(1, js_hypot(D - xc, miss)), tc = t0 + tr->T[rk->rt.iCut];
+            if (o->g2 > 0) {
+                buf = ignition_buf(ar, rk, r, -0.4, &len);
+                scale(buf, len, 1 / rc);
+                air_filter(buf, len, rc);
+                push_mono(sc, buf, len, tc, rk_pan(rk, p, xc, rc), o->g2);
+            }
+            push_event(sc, BE_EVENT_PASS, tc);
+        }
+    } else if (rk->passed)
+        push_event(sc, BE_EVENT_PASS, t0 + rk->passT);
+    if (rk->has_crack && o->g3 > 0) {
+        double rb = js_hypot(D - rk->crack.x, miss);
+        buf = crack_buf(ar, &rk->crack, &len);
+        post_layer(ar, buf, len, rb, ground);
+        push_mono(sc, buf, len, t0 + rk->crack.t, rk_pan(rk, p, rk->crack.x, rb), o->g3);
+        push_event(sc, BE_EVENT_CRACK, t0 + rk->crack.t);
+    }
+    if (rk->has_hit && o->g4 > 0) {
+        const hit_t *h = &rk->hit;
+        double hp = rk_pan(rk, p, h->x, h->r), scl = clampd(pow(0.2 / PV(p, rkMass), 1.0 / 3), 0.25, 3);
+        const be_material *surf = be_material_find(strcmp(PS(p, target), "none") ? PS(p, target) : "concrete");
+        if (rk->mode == RK_LANDING) {
+            buf = modal_hit(ar, be_material_find("steel"), h->E, scl, r, 0, 0, 0, &len);
+            scale(buf, len, 1 / h->r);
+            post_layer(ar, buf, len, h->r, ground * 0.5);
+            push_mono(sc, buf, len, t0 + h->t, hp, o->g4);
+            buf = modal_hit(ar, surf, h->E, scl, r, 0, 0, 0, &len);
+            scale(buf, len, 1 / h->r);
+            air_filter(buf, len, h->r);
+            push_mono(sc, buf, len, t0 + h->t, hp, o->g4);
+            push_event(sc, BE_EVENT_IMPACT, t0 + h->t);
+        } else {
+            buf = modal_hit(ar, surf, h->E, scl, r, 0, 0, 0, &len);
+            scale(buf, len, 1 / h->r);
+            post_layer(ar, buf, len, h->r, ground * 0.5);
+            push_mono(sc, buf, len, t0 + h->t, hp, o->g4);
+            push_event(sc, BE_EVENT_IMPACT, t0 + h->t);
+            if (rk->has_pay) {
+                xopt_t xo;
+                memset(&xo, 0, sizeof xo);
+                xo.W = PV(p, payload); xo.r = h->r; xo.surface = surf; xo.t0 = t0 + h->tau; xo.pan = hp; xo.ground = ground;
+                xo.gBlast = xo.gRumble = xo.gFrag = xo.gDebris = o->g4;
+                explosion_layers(sc, &rk->pay, &xo, r);
+            }
+        }
+    }
+}
+
+/* Static burn, one seamless period: every modulation runs on a whole number of cycles per loop. */
+static void rocket_static(arena *ar, const rkplan_t *rk, const be_params *p, const gains_t *o, rng_t *r, int Np, float **mid_out,
+                          float **side_out)
+{
+    float *a = jet_noise(ar, Np, rk->fpk, r, 1), *b = jet_noise(ar, Np, rk->fpk, r, 1);
+    float *ck = rk->crk > 0 ? crackle_noise(ar, Np, rk->fpk, r, 1) : 0, *mid = fnew(ar, Np), *side = fnew(ar, Np);
+    double Lp = Np / FS, fch = js_round(clampd(60 / sqrt(rk->De), 25, 400) * Lp) / Lp, fw = js_round(PV(p, rkWhineHz) * Lp) / Lp;
+    double fw2 = js_round(1.37 * PV(p, rkWhineHz) * Lp) / Lp, ca[6], cp[6], dir = db_to_lin(6 * 0.717 - 3);
+    int k, i;
+    for (k = 1; k <= 6; k++) {
+        double q1 = rnd(r), q2;
+        ca[k - 1] = 0.06 / sqrt(k) * (0.5 + q1);
+        q2 = rnd(r);
+        cp[k - 1] = q2 * TAU;
+    }
+    for (i = 0; i < Np; i++) {
+        double t = i / FS, rough = 0, mod, s, wh;
+        for (k = 0; k < 6; k++)
+            rough += ca[k] * sin(TAU * (k + 1) * t / Lp + cp[k]);
+        mod = (1 + rough) * (1 + 0.6 * PV(p, rkChug) * sin(TAU * fch * t + 3 * rough));
+        s = a[i] * (1 - 0.5 * rk->crk) + (ck ? ck[i] * rk->crk : 0);
+        wh = PV(p, rkWhine) > 0 ? PV(p, rkWhine) * 0.35 * (sin(TAU * fw * t) + 0.5 * sin(TAU * 2 * fw * t + 1) + 0.4 * sin(TAU * fw2 * t)) : 0;
+        mid[i] = (float)(rk->p1 * dir * (o->g1 * s * mod + o->g3 * wh));
+        side[i] = (float)(rk->p1 * dir * o->g1 * b[i] * mod * 0.35);
+    }
+    *mid_out = mid;
+    *side_out = side;
+}
+
+/* ------------------------------------------------------------------ rotors */
+enum { RT_HOVER, RT_FLYBY, RT_TAKEOFF, RT_LANDING };
+typedef struct {
+    int N, B, mode, nr, RS, has_tr, passed, nev;
+    double Dm, n0, vtip, Mt, p1, dur, bpf, D, r, passT;
+    float **nj;
+    traj_t tr;
+    double ev_t[2];
+} rtplan_t;
+
+typedef struct { int mode; double x0, v, ta, tl, v0, dd; } rtmotion_t;
+
+static double rt_tau(const rtmotion_t *m, double t)
+{
+    if (m->mode == RT_HOVER) return 1;
+    if (m->mode == RT_FLYBY) return 1.08;
+    if (m->mode == RT_TAKEOFF)
+        return t < 0.5 ? 0.7 * t : t < 1 ? 0.35 : t < 1.6 ? 0.35 + 0.95 * (t - 1) / 0.6 : t < 3 ? 1.3 : 1.3 - 0.2 * mind(1, (t - 3) / 0.5);
+    return t < m->tl - 0.6 ? 0.93 : t < m->tl ? 0.93 + 0.3 * (1 - (m->tl - t) / 0.6) : maxd(0, 1.23 * (1 - (t - m->tl) / 1.2));
+}
+
+static double rt_x(const void *st, double t)
+{
+    const rtmotion_t *m = (const rtmotion_t *)st;
+    if (m->mode == RT_HOVER) return 0;
+    if (m->mode == RT_FLYBY) return m->x0 + m->v * t;
+    if (m->mode == RT_TAKEOFF) {
+        double s = maxd(0, t - 1.5), ta = m->v / 3;
+        return s < ta ? 1.5 * s * s : 1.5 * ta * ta + m->v * (s - ta);
+    }
+    return t < m->tl ? m->v0 * t - 0.5 * m->v0 / m->tl * t * t : m->dd;
+}
+
+static int rotor_mode(const char *s)
+{
+    if (!strcmp(s, "hover")) return RT_HOVER;
+    if (!strcmp(s, "flyby")) return RT_FLYBY;
+    if (!strcmp(s, "takeoff")) return RT_TAKEOFF;
+    if (!strcmp(s, "landing")) return RT_LANDING;
+    return -1;
+}
+
+/* Hover speed follows from weight: thrust per rotor = kT rho n^2 D^4. Sound power is a small, tip-Mach-dependent
+   share of shaft power. */
+static void plan_rotor(arena *ar, const be_params *p, rng_t *g, rtplan_t *out)
+{
+    int N = (int)clampd(js_round(PV(p, rtCount)), 1, 8), B = (int)clampd(js_round(PV(p, rtBlades)), 2, 7), j, k, i, hover;
+    double Dm = PV(p, rtDia), m = PV(p, rtMass), kT = clampd(0.11 * pow(0.3 / Dm, 0.3), 0.04, 0.11), n0, vtip, Mt, A1, T1, Pm, Wa;
+    double v = PV(p, rtSpeed), D = PV(p, D), dur, miss = PV(p, miss);
+    rtmotion_t mo;
+    memset(out, 0, sizeof *out);
+    memset(&mo, 0, sizeof mo);
+    n0 = sqrt(m * 9.81 / (N * kT * RHO * pow(Dm, 4)));
+    if (PI * Dm * n0 > 0.92 * C_AIR)
+        n0 = 0.92 * C_AIR / (PI * Dm);
+    vtip = PI * Dm * n0; Mt = vtip / C_AIR; A1 = PI * Dm * Dm / 4; T1 = m * 9.81 / N;
+    Pm = N * pow(T1, 1.5) / sqrt(2 * RHO * A1);
+    Wa = Pm * 1e-3 * pow(Mt, 3);
+    mo.mode = rotor_mode(PS(p, rtMode));
+    mo.v = v;
+    out->mode = mo.mode;
+    if (mo.mode == RT_HOVER) { dur = LOOP_S; D = 0; }
+    else if (mo.mode == RT_FLYBY) {
+        double xs = D + mind(clampd(15 * miss, 20, 300), v * 4.5);
+        mo.x0 = maxd(0, D - v * 4.5);
+        dur = maxd(0.5, (xs - mo.x0) / v);
+    } else if (mo.mode == RT_TAKEOFF) {
+        dur = 5.5;
+        out->ev_t[out->nev++] = 1.5;
+    } else {
+        mo.dd = maxd(D, 2);
+        mo.tl = mind(2 * mo.dd / v, 8);
+        mo.v0 = 2 * mo.dd / mo.tl;
+        D = mo.dd;
+        dur = mo.tl + 1.6;
+        out->ev_t[out->nev++] = mo.tl;
+    }
+    out->RS = 200;
+    out->nr = (int)ceil(dur * out->RS) + 2;
+    hover = mo.mode == RT_HOVER;
+    out->nj = (float **)ar_alloc(ar, N * sizeof(float *));
+    for (j = 0; j < N; j++) {
+        double det = (rnd(g) * 2 - 1) * 0.012, ca[5], cp[5], base;
+        float *arr = fnew(ar, out->nr);
+        for (k = 1; k <= 5; k++) {
+            double q1 = rnd(g), q2;
+            ca[k - 1] = 0.009 / k * (0.5 + q1);
+            q2 = rnd(g);
+            cp[k - 1] = q2 * TAU;
+        }
+        /* in a loop every rotor must complete a whole number of blade passes */
+        base = hover ? js_round(n0 * (1 + PV(p, rtWander) * det) * B * dur) / (B * dur) : n0;
+        for (i = 0; i < out->nr; i++) {
+            double t = (double)i / out->RS, w = hover ? 0 : det;
+            for (k = 0; k < 5; k++)
+                w += ca[k] * sin(TAU * (k + 1) * t / dur + cp[k]);
+            arr[i] = (float)(base * (1 + PV(p, rtWander) * w) * sqrt(rt_tau(&mo, mind(t, dur))));
+        }
+        out->nj[j] = arr;
+    }
+    out->N = N; out->B = B; out->Dm = Dm; out->n0 = n0; out->vtip = vtip; out->Mt = Mt;
+    out->p1 = sqrt(Wa * RHO * C_AIR / (4 * PI));
+    out->dur = dur; out->bpf = B * n0; out->D = D; out->r = maxd(1, miss);
+    if (!hover) {
+        int iPass;
+        traj_kin_fn(ar, dur, D, miss, rt_x, &mo, &out->tr);
+        out->has_tr = 1;
+        iPass = out->tr.n - 1;
+        for (i = 0; i < out->tr.n; i++)
+            if (out->tr.x[i] >= D) { iPass = i; break; }
+        out->passed = out->tr.x[out->tr.n - 1] >= D;
+        out->passT = out->tr.T[iPass];
+    }
+}
+
+/* Rotor source at 1 m: blade-pass tones from a wavetable, vortex noise modulated at blade rate, slap, motor whine. */
+static void rotor_signal(arena *ar, const rtplan_t *rt, const be_params *p, const gains_t *o, rng_t *r, int ns, int periodic,
+                         float **mid_out, float **side_out)
+{
+    int N = rt->N, B = rt->B, size = 2048, M = (int)clampd(floor(15000 / (rt->bpf * 1.4)), 2, 40), m, i, j, k, pass, mB;
+    float *tone = fnew(ar, size + 1), *slapT = fnew(ar, size + 1), *wn, *bb, *mid, *side;
+    double kx = clampd(2.2 - 1.8 * rt->Mt, 0.5, 2.2), e = 0, fb0, bbShare, lp = 0, bp = 0, eb = 0, rm, *c, gN, gS, gW;
+    for (m = 1; m <= M; m++) {
+        double am = pow(m, -kx), ph = rnd(r) * TAU;
+        for (i = 0; i < size; i++) {
+            double th = TAU * i / size;
+            tone[i] = (float)(tone[i] + am * sin(m * th + ph));
+            slapT[i] = (float)(slapT[i] + cos(m * th));
+        }
+    }
+    for (i = 0; i < size; i++)
+        e += (double)tone[i] * tone[i];
+    e = sqrt(e / size);
+    if (!e) e = 1;
+    for (i = 0; i < size; i++) {
+        tone[i] = (float)(tone[i] / e);
+        slapT[i] = (float)(slapT[i] * (1.0 / sqrt(M / 2.0)));
+    }
+    tone[size] = tone[0];
+    slapT[size] = slapT[0];
+    fb0 = 0.25 * rt->vtip / (0.02 * rt->Dm + 0.004);
+    bbShare = clampd(0.9 - 0.25 * log10(rt->Dm / 0.1), 0.3, 0.9);
+    wn = fnew(ar, ns);
+    bb = fnew(ar, ns);
+    for (i = 0; i < ns; i++)
+        wn[i] = (float)(rnd(r) * 2 - 1);
+    for (pass = periodic ? 0 : 1; pass < 2; pass++)
+        for (i = 0; i < ns; i++) {
+            int iu0 = (int)mind(rt->nr - 1, floor(i / FS * rt->RS));
+            double fc = clampd(fb0 * rt->nj[0][iu0] / rt->n0, 80, 7500), fk = 2 * sin(PI * fc / FS), hp;
+            lp += fk * bp;
+            hp = wn[i] - lp - 1.4 * bp;
+            bp += fk * hp;
+            bb[i] = (float)bp;
+        }
+    for (i = 0; i < ns; i++)
+        eb += (double)bb[i] * bb[i];
+    rm = sqrt(eb / ns);
+    scale(bb, ns, 1 / (rm ? rm : 1));
+    c = dnew(ar, N);
+    mB = (int)maxd(1, js_round(clampd(1200 / rt->bpf, 3, 400)));
+    mid = fnew(ar, ns);
+    side = fnew(ar, ns);
+    gN = 1 / sqrt(N);
+    gS = o->g4 * PV(p, rtSlap);
+    gW = o->g3 * PV(p, rtWhine) * 0.5;
+    for (k = 0; k < ns; k++) {
+        double u = k / FS * rt->RS, fu, sm = 0, ss = 0, amod = 0, fr = 0, amp;
+        int iu = (int)mind(rt->nr - 2, floor(u));
+        fu = u - iu;
+        for (j = 0; j < N; j++) {
+            double nn = rt->nj[j][iu] + (rt->nj[j][iu + 1] - rt->nj[j][iu]) * fu, pos, fp, s;
+            int ip;
+            c[j] += B * nn / FS;
+            if (c[j] >= 1) c[j] -= floor(c[j]);
+            pos = c[j] * size;
+            ip = (int)floor(pos);
+            fp = pos - ip;
+            s = o->g1 * (tone[ip] + (tone[ip + 1] - tone[ip]) * fp) + gS * (slapT[ip] + (slapT[ip + 1] - slapT[ip]) * fp);
+            if (gW > 0)
+                s += gW * (fsin(mB * c[j]) + 0.4 * fsin(2 * mB * c[j] + 0.16));
+            sm += s;
+            ss += (j & 1) ? -s : s;
+            amod += 1 + 0.7 * fsin(c[j] + 0.25 + j * 0.3);
+            fr += nn;
+        }
+        fr /= N * rt->n0;
+        amp = rt->p1 * pow(fr, 2.5);
+        mid[k] = (float)(amp * (sm * gN + o->g2 * bbShare * bb[k] * amod / N));
+        side[k] = (float)(amp * ss * gN * 0.45);
+    }
+    *mid_out = mid;
+    *side_out = side;
+}
+
+static double rotor_gen(void *v, int k, int i_, double f_, double x_, double r_) { return ((const float *)v)[k]; }
+
+static void rotor_layers(scene_t *sc, rtplan_t *rt, const be_params *p, const gains_t *o, rng_t *r)
+{
+    const traj_t *tr = &rt->tr;
+    int ns = (int)floor((tr->n - 1) / TRAJ_HZ * FS), e;
+    float *mid, *side;
+    stereo_t wk;
+    if (ns < 64)
+        return;
+    rotor_signal(sc->ar, rt, p, o, r, ns, 0, &mid, &side);
+    if (moving_source(sc->ar, tr, rt->D, PV(p, miss), rotor_gen, mid, 0, 0, &wk))
+        push_stereo(sc, wk.L, wk.R, wk.n, o->t0 + wk.t, 1);
+    if (rt->mode == RT_FLYBY && rt->passed)
+        push_event(sc, BE_EVENT_PASS, o->t0 + rt->passT);
+    for (e = 0; e < rt->nev; e++) {
+        int i = (int)mind(tr->n - 1, js_round(rt->ev_t[e] * TRAJ_HZ));
+        push_event(sc, BE_EVENT_LAUNCH, o->t0 + tr->T[i]);
+    }
+}
+
 /* ------------------------------------------------------------------ projectile */
 static int launch_of(const char *s)
 {
@@ -3280,6 +3897,8 @@ typedef struct {
     implo_t im;
     dsplan_t ds;
     fplan_t ff;
+    rkplan_t rk;
+    rtplan_t rt;
 } plan_t;
 
 static void proj_layers(scene_t *sc, plan_t *pl, const be_params *p, const gains_t *o, rng_t *r)
@@ -3349,6 +3968,8 @@ static int kind_of(const char *k)
     if (!strcmp(k, "implosion")) return 4;
     if (!strcmp(k, "destruction")) return 5;
     if (!strcmp(k, "field")) return 6;
+    if (!strcmp(k, "rocket")) return 7;
+    if (!strcmp(k, "rotor")) return 8;
     return -1;
 }
 
@@ -3409,6 +4030,10 @@ static void plan_rep(arena *ar, const be_params *p, int seed, int k, plan_t *out
                        PV(&out->q, imDist), &out->im);
     else if (kind == 6)
         plan_field(ar, &out->q, &g, &out->ff);
+    else if (kind == 7)
+        plan_rocket(ar, &out->q, &g, &out->rk);
+    else if (kind == 8)
+        plan_rotor(ar, &out->q, &g, &out->rt);
     else if (kind == 5)
         plan_destruction(ar, PS(&out->q, dsMat), PV(&out->q, dsMass), PV(&out->q, dsHeight), PV(&out->q, dsPieces),
                          PV(&out->q, dsDist), PV(&out->q, dsSpread), &g, &out->ds);
@@ -3474,6 +4099,10 @@ static void mix_scene(scene_t *sc, const be_params *p, int seed, mix_t *out)
             destruction_layers(sc, &pl->ds, &pl->q, &o, &r, grains);
         else if (pl->kind == 6)
             field_layers(sc, &pl->ff, &pl->q, &o, &r);
+        else if (pl->kind == 7)
+            rocket_layers(sc, &pl->rk, &pl->q, &o, &r);
+        else if (pl->kind == 8)
+            rotor_layers(sc, &pl->rt, &pl->q, &o, &r);
         else
             proj_layers(sc, pl, &pl->q, &o, &r);
         tOff += interval * (1 + PV(p, seqJitter) * (rnd(&trnd) - 0.5));
@@ -3565,6 +4194,17 @@ static int check(const be_params *p)
             return BE_ERR_VALUE;
         if (launcher_of(PS(p, lnType)) == LN_LINE && strcmp(PS(p, bpBody), "none") && !body_find(PS(p, bpBody)))
             return BE_ERR_VALUE;
+    } else if (kind_of(PS(p, kind)) == 7) {
+        if (rocket_mode(PS(p, rkMode)) < 0 || !(PV(p, rkThrust) > 0) || !(PV(p, rkUe) > 0) || !(PV(p, rkNozzle) > 0) ||
+            !(PV(p, rkMass) > 0))
+            return BE_ERR_VALUE;
+        if (strcmp(PS(p, target), "none") && !be_material_find(PS(p, target)))
+            return BE_ERR_VALUE;
+    } else if (kind_of(PS(p, kind)) == 8) {
+        if (rotor_mode(PS(p, rtMode)) < 0 || !(PV(p, rtDia) > 0) || !(PV(p, rtMass) > 0))
+            return BE_ERR_VALUE;
+        if (rotor_mode(PS(p, rtMode)) != RT_HOVER && !(PV(p, rtSpeed) > 0))
+            return BE_ERR_VALUE;
     } else if (kind_of(PS(p, kind)) == 6) {
         if (field_mode(PS(p, ffMode)) < 0 || !(PV(p, ffDens) > 0))
             return BE_ERR_VALUE;
@@ -3619,7 +4259,9 @@ static void sort_events(be_event *e, int n)       /* stable, as Array.prototype.
 
 int be_is_loop(const be_params *p)
 {
-    return p && kind_of(PS(p, kind)) == 6 && !strcmp(PS(p, ffMode), "hum");
+    int k = p ? kind_of(PS(p, kind)) : -1;
+    return (k == 6 && !strcmp(PS(p, ffMode), "hum")) || (k == 7 && !strcmp(PS(p, rkMode), "static")) ||
+           (k == 8 && !strcmp(PS(p, rtMode), "hover"));
 }
 
 /* A filter applied to one period of a loop must itself come out periodic: run it over two, keep the second. */
@@ -3644,8 +4286,16 @@ static void render_loop(arena *ar, const be_params *p, int seed, mix_t *out)
     const be_env *env = be_env_find(PS(p, env));
     plan_rep(ar, p, seed, 0, pl);
     o = scene_gains(p);
-    field_signal(ar, &pl->ff, p, &o, &r, Np, 1, &mid, &side);
-    rr = pl->ff.r;
+    if (pl->kind == 8) {
+        rotor_signal(ar, &pl->rt, p, &o, &r, Np, 1, &mid, &side);
+        rr = pl->rt.r;
+    } else if (pl->kind == 6) {
+        field_signal(ar, &pl->ff, p, &o, &r, Np, 1, &mid, &side);
+        rr = pl->ff.r;
+    } else {
+        rocket_static(ar, &pl->rk, p, &o, &r, Np, &mid, &side);
+        rr = pl->rk.r;
+    }
     for (i = 0; i < Np; i++) {
         L[i] = (float)((mid[i] + side[i]) / rr);
         R[i] = (float)((mid[i] - side[i]) / rr);

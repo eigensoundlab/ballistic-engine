@@ -17,7 +17,7 @@ static class Program
         var hum = Ballistic.Render("shield", 1, "game");
         Console.WriteLine($"shield: {hum.Seconds:0.000} s, loop {hum.Loop}");
         if (!hum.Loop || hum.Length != 4 * 48000) return 1;
-        try { Ballistic.Render("quad"); return 1; }
+        try { Ballistic.Render("carpass"); return 1; }
         catch (BallisticException e) { Console.WriteLine("as it should: " + e.Message); }
         return 0;
     }

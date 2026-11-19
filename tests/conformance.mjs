@@ -42,6 +42,10 @@ const EXTRA = [                                   // the parameters games change
   ['crate', { dsMass: 3, dsHeight: 0.3, dsPieces: 6, seqCount: 2 }],
   ['shielddown', { seqCount: 2, ffDist: 2 }],
   ['plasma', { ffDist: 5, env: 'urban' }],
+  ['jet', { seqCount: 2, seqJitter: 0.3, env: 'urban' }],
+  ['launcher', { target: 'none', D: 40 }],
+  ['quadpass', { seqCount: 2, rtSlap: 0.5 }],
+  ['quad', { rtCount: 6, rtMass: 3, env: 'indoor' }],
 ];
 
 const ctx = {};

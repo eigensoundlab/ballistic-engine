@@ -8,8 +8,7 @@ is checked against it on every change.
 - **C99, no dependencies** beyond the C library and libm. One header, two source files.
 - **Thread-safe**, no global state: render a pool of takes on worker threads while a level loads.
 - **5 to 18 times faster** than the JavaScript engine on V8 (below).
-- **59 of Ballistic's 83 presets** so far: every kind but rockets and rotors, and the presets that need a
-  recording.
+- **73 of Ballistic's 83 presets**: every kind of sound Ballistic models; the other 10 need a recording.
 - **Bindings**: Python (ctypes, `bindings/python`), C# for Unity and .NET (`bindings/csharp`).
 - **Apache-2.0**, as Ballistic.
 
@@ -24,8 +23,9 @@ is checked against it on every change.
 | Implosion: Rayleigh-Plesset collapse in air or water, shell stress, fracture and falling pieces | tube, vactank, bubble, hull | ported, conforms |
 | Destruction: pieces by a power law, free fall, bounces, stick-slip creaks and groans, rubble | window, crate, wall, wallgravel, gantry | ported, conforms |
 | Forcefield: a sheet of modes or a plasma (MHD waves, reconnection, chorus, solitons, kink disruption); hums as seamless loops | shield, shieldhit, shieldup, shielddown, reactor, barrier, plasma, plasmahit, kink, tokamak, chorus | ported, conforms |
-| Rocket, rotor | 14 presets | next: `be_render` answers `BE_ERR_KIND` |
-| Recording, measured materials, recorded rooms, events triggered by a recording | 10 presets | need your recordings: `BE_ERR_UNSUPPORTED` |
+| Jet and rocket: jet mixing noise from thrust and exhaust speed, supersonic crackle, chug, turbine whine; launch, fly-by, landing with a braking burn, static burn as a loop | launcher, incoming, salvo, booster, rlanding, jet, thruster | ported, conforms |
+| Rotor: rotor speed from weight and size, blade-pass tones, vortex noise, beating rotors, blade slap, motor whine; hover as a loop, fly-by, take-off, landing | quad, quadpass, swarm, heavylift, quadland, heli, helihover | ported, conforms |
+| Recording, measured materials, recorded rooms, events triggered by a recording | 10 presets | need your recordings: `BE_ERR_KIND` / `BE_ERR_UNSUPPORTED` |
 
 Ballistic's finishing for action (`"game"`, `"block"`, `"slow"`, `"far"`: punch, weight, drive, bite, tail, swell,
 width, loudness) is ported too: `be_finish`, and `be_finish_loop` for a loop (`be_is_loop`), which it keeps seamless.

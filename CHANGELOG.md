@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.0 - 2026-11-19
+
+- **Jet and rocket**: thrust, mass and drag along the path; jet mixing noise with its Strouhal peak, supersonic
+  crackle, chug, turbine whine, ground effect; ignition and cut-off; launch, fly-by, landing with a braking burn
+  that reaches touchdown speed at the pad, and a static burn as a seamless loop. Payloads and impacts. Presets
+  launcher, incoming, salvo, booster, rlanding, jet, thruster.
+- **Rotor**: rotor speed from weight, size and blade count; blade-pass tones, vortex noise, rotors beating against
+  each other, blade slap, motor whine; hover as a seamless loop, fly-by, take-off, landing. Presets quad, quadpass,
+  swarm, heavylift, quadland, heli, helihover.
+- Every kind Ballistic models is ported: 73 of its 83 presets render; the other 10 need a recording.
+
 ## 0.3.0 - 2026-11-19
 
 - **Discharge**: thunder from a crooked channel split into stretches (Few), branches, return strokes, sustained arcs

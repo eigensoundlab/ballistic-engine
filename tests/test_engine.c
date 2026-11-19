@@ -72,7 +72,7 @@ static void every_preset(void)
                   "%s: game finishing, peak %g", be_preset_id(i), peak(&s));
         be_sound_free(&s);
     }
-    CHECK(rendered >= 59, "%d presets rendered", rendered);
+    CHECK(rendered >= 73, "%d presets rendered", rendered);
     printf("%d presets render, %d wait for later versions\n", rendered, later);
     be_params_free(p);
 }
@@ -112,8 +112,8 @@ static void params(void)
     be_params_preset(q, "pistol");
     be_params_set_text(q, "target", "cheese");
     CHECK(be_render(q, 1, &s) == BE_ERR_VALUE, "an unknown target material");
-    be_params_preset(q, "quad");
-    CHECK(be_render(q, 1, &s) == BE_ERR_KIND, "a kind not ported yet");
+    be_params_preset(q, "carpass");
+    CHECK(be_render(q, 1, &s) == BE_ERR_KIND, "a kind not ported (a recording)");
     be_params_preset(q, "pistol");
     be_params_set_text(q, "env", "ir");
     CHECK(be_render(q, 1, &s) == BE_ERR_UNSUPPORTED, "a recorded room");
@@ -122,7 +122,14 @@ static void params(void)
     be_sound_free(&s);
     CHECK(be_kind_supported("projectile") && be_kind_supported("explosion") && be_kind_supported("blaster") &&
           be_kind_supported("discharge") && be_kind_supported("implosion") && be_kind_supported("destruction") &&
-          be_kind_supported("field") && !be_kind_supported("rotor") && !be_kind_supported("rocket"), "kinds");
+          be_kind_supported("field") && be_kind_supported("rotor") && be_kind_supported("rocket") &&
+          !be_kind_supported("recording"), "kinds");
+    be_params_preset(q, "thruster");
+    CHECK(be_is_loop(q), "a static burn is a loop");
+    be_params_preset(q, "helihover");
+    CHECK(be_is_loop(q), "a hover is a loop");
+    be_params_preset(q, "heli");
+    CHECK(!be_is_loop(q), "a fly-by is not");
     be_params_preset(q, "shield");
     CHECK(be_is_loop(q), "a field's hum is a loop");
     be_params_preset(q, "shielddown");
