@@ -1,0 +1,138 @@
+# SPDX-License-Identifier: Apache-2.0
+# Builds the library for every platform and, on a version tag (v0.3.0), publishes them as a GitHub release:
+#   ballistic-engine-VERSION-PLATFORM.zip   the shared and static library, the CLI, the header, the Python binding
+#   ballistic-engine-VERSION-unity.zip      BallisticEngine.cs and the native plugins in Unity's folder layout
+# Run by hand (Actions > Release > Run workflow) it builds the same files as artifacts, without a release.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux-x64, os: ubuntu-22.04 }
+          - { name: linux-arm64, os: ubuntu-22.04-arm }
+          - { name: macos-universal, os: macos-latest, cmake: "-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64" }
+          - { name: windows-x64, os: windows-latest, cmake: "-A x64" }
+          - { name: windows-arm64, os: windows-latest, cmake: "-A ARM64", cross: true }
+          - { name: android-arm64-v8a, os: ubuntu-latest, abi: arm64-v8a, cross: true }
+          - { name: android-armeabi-v7a, os: ubuntu-latest, abi: armeabi-v7a, cross: true }
+          - { name: android-x86_64, os: ubuntu-latest, abi: x86_64, cross: true }
+    runs-on: ${{ matrix.os }}
+    name: ${{ matrix.name }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        shell: bash
+        run: |
+          extra="${{ matrix.cmake }}"
+          if [ -n "${{ matrix.abi }}" ]; then
+            ndk="${ANDROID_NDK_LATEST_HOME:-$ANDROID_NDK_HOME}"
+            extra="-DCMAKE_TOOLCHAIN_FILE=$ndk/build/cmake/android.toolchain.cmake -DANDROID_ABI=${{ matrix.abi }} -DANDROID_PLATFORM=android-21"
+          fi
+          tests=ON
+          if [ "${{ matrix.cross }}" = true ]; then tests=OFF; fi
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBE_TESTS=$tests $extra
+          cmake --build build --config Release -j 4
+      - name: Test
+        if: ${{ !matrix.cross }}
+        run: ctest --test-dir build -C Release --output-on-failure
+      - name: Package
+        shell: bash
+        run: |
+          version=$(sed -n 's/^project(ballistic_engine VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
+          d="ballistic-engine-$version-${{ matrix.name }}"
+          mkdir -p "dist/$d/lib" "dist/$d/bin" "dist/$d/include" "dist/$d/python"
+          b=build; if [ -d build/Release ]; then b=build/Release; fi
+          case "${{ matrix.name }}" in
+            windows-*)
+              cp "$b/ballistic.dll" "$b/ballistic.lib" "$b/ballistic_static.lib" "dist/$d/lib/"
+              cp "$b/ballistic-render.exe" "dist/$d/bin/" ;;
+            macos-*)
+              real=$(ls build/libballistic.*.*.*.dylib | head -1)
+              cp "$real" "dist/$d/lib/libballistic.dylib"; cp "$real" "dist/$d/lib/libballistic.0.dylib"
+              cp build/libballistic_static.a "dist/$d/lib/"; cp build/ballistic-render "dist/$d/bin/" ;;
+            android-*)
+              real=$(ls build/libballistic.so* | head -1)
+              cp "$real" "dist/$d/lib/libballistic.so"; cp build/libballistic_static.a "dist/$d/lib/"
+              cp build/ballistic-render "dist/$d/bin/" ;;
+            *)
+              real=$(ls build/libballistic.so.*.*.* | head -1)
+              cp "$real" "dist/$d/lib/libballistic.so"; cp "$real" "dist/$d/lib/libballistic.so.0"
+              cp build/libballistic_static.a "dist/$d/lib/"; cp build/ballistic-render "dist/$d/bin/" ;;
+          esac
+          cp include/ballistic.h "dist/$d/include/"
+          cp bindings/python/ballistic_engine.py "dist/$d/python/"
+          cp README.md LICENSE NOTICE CHANGELOG.md "dist/$d/"
+          cd dist
+          if command -v zip >/dev/null; then zip -qr "$d.zip" "$d"; else 7z a -bd "$d.zip" "$d" >/dev/null; fi
+          ls -la
+      - name: Check the packaged library loads
+        if: ${{ !matrix.cross }}
+        shell: python
+        run: |
+          import glob, os, sys
+          d = glob.glob("dist/ballistic-engine-*/")[0]
+          lib = [p for p in glob.glob(d + "lib/*") if p.endswith((".so", ".dylib", ".dll"))][0]
+          os.environ["BALLISTIC_ENGINE_LIB"] = os.path.abspath(lib)
+          sys.path.insert(0, os.path.join(d, "python"))
+          import ballistic_engine as be
+          s = be.render("railgun", seed=1, action="game")
+          print(lib, be.load().version, "%.3f s" % s.seconds, s.events[:2])
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: dist/*.zip
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Unity package
+        run: |
+          version=$(sed -n 's/^project(ballistic_engine VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          u="unity/BallisticEngine"
+          mkdir -p "$u/Runtime" "$u/Plugins/x86_64" "$u/Plugins/ARM64" "$u/Plugins/macOS" "$u/Plugins/iOS" "$u/Plugins/WebGL"
+          cp bindings/csharp/BallisticEngine.cs "$u/Runtime/"
+          cp bindings/csharp/README.md LICENSE NOTICE "$u/"
+          for z in artifacts/*/*.zip; do unzip -q "$z" -d unpacked; done
+          p() { ls -d unpacked/ballistic-engine-*-"$1" | head -1; }
+          cp "$(p windows-x64)/lib/ballistic.dll" "$u/Plugins/x86_64/"
+          cp "$(p linux-x64)/lib/libballistic.so" "$u/Plugins/x86_64/"
+          cp "$(p windows-arm64)/lib/ballistic.dll" "$u/Plugins/ARM64/"
+          cp "$(p macos-universal)/lib/libballistic.dylib" "$u/Plugins/macOS/"
+          for abi in arm64-v8a armeabi-v7a x86_64; do
+            mkdir -p "$u/Plugins/Android/libs/$abi"
+            cp "$(p android-$abi)/lib/libballistic.so" "$u/Plugins/Android/libs/$abi/"
+          done
+          for dst in iOS WebGL; do cp include/ballistic.h src/engine.c src/params.c src/internal.h src/tables.h "$u/Plugins/$dst/"; done
+          (cd unity && zip -qr "../ballistic-engine-$version-unity.zip" BallisticEngine)
+          mkdir -p out && cp artifacts/*/*.zip out/ && mv "ballistic-engine-$version-unity.zip" out/
+          ls -la out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: unity
+          path: out/*unity.zip
+      - name: GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          awk -v v="$VERSION" '$1=="##" && $2==v {on=1; next} /^## / {on=0} on' CHANGELOG.md > notes.md
+          test -s notes.md || { echo "CHANGELOG.md has no '## $VERSION' section"; exit 1; }
+          test "${GITHUB_REF_NAME#v}" = "$VERSION" || { echo "tag $GITHUB_REF_NAME, CMakeLists.txt $VERSION"; exit 1; }
+          gh release create "$GITHUB_REF_NAME" out/*.zip --title "Ballistic Engine $VERSION" --notes-file notes.md

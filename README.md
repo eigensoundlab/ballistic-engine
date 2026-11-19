@@ -64,6 +64,13 @@ Most of a long sound's time is its room (the reverb runs over the whole tail); `
 than `"valley"`. A game renders a handful of takes per sound when it loads and plays them in turn, rather than
 rendering on the shot.
 
+## Download
+
+Every release on GitHub has the library built for Linux (x64, arm64), macOS (universal), Windows (x64, arm64) and
+Android (arm64-v8a, armeabi-v7a, x86_64): `ballistic-engine-VERSION-PLATFORM.zip`, with the shared and static library,
+`ballistic-render`, the header and the Python binding. `ballistic-engine-VERSION-unity.zip` is ready for a Unity
+project. GitHub Actions builds them from the tagged source (`.github/workflows/release.yml`).
+
 ## Build
 
 ```bash

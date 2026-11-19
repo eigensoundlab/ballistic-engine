@@ -3,6 +3,11 @@
 `BallisticEngine.cs` is the whole binding: copy it into the project (in Unity, anywhere under `Assets/`) and add the
 native library for each platform the game ships on.
 
+Each release has `ballistic-engine-VERSION-unity.zip`: unpack it into `Assets/` and the binding and the native
+libraries for Windows (x64, ARM64), Linux, macOS (universal) and Android (arm64-v8a, armeabi-v7a, x86_64) are in
+place, with the C sources for iOS and WebGL. Check each plugin's platform in the Inspector once (Unity guesses from
+the folder; `x86_64` holds both the Windows `.dll` and the Linux `.so`). To build them yourself:
+
 | Platform | Native library | Where in Unity |
 | --- | --- | --- |
 | Windows | `ballistic.dll` (`cmake --build build --config Release`) | `Assets/Plugins/x86_64/` |
