@@ -5,7 +5,7 @@
 
 #include "ballistic.h"
 
-#define BE_VERSION "0.1.0"
+#define BE_VERSION "0.2.0"
 #define BE_REFERENCE "Ballistic Foley Lab engine.js 0.1.0 (45a3f91)"
 #define BE_TEXT_MAX 32
 
@@ -37,6 +37,10 @@ typedef struct {
     int n_taps;
     be_tap taps[3];
 } be_env;
+
+typedef struct { const char *id; int nf; double f[8]; double q; } be_body;
+typedef struct { const char *id; double E, rho, nu, eta; } be_plate;
+typedef struct { const char *id; double frac, hiss; const char *spatter; } be_ablation;
 
 #include "tables.h"
 

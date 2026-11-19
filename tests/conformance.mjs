@@ -31,13 +31,18 @@ const EXTRA = [                                   // the parameters games change
   ['ricochet', { D: 2, miss: 3, env: 'indoor' }],
   ['charge', { exW: 0.3, exDist: 8, exSurface: 'concrete', env: 'indoor' }],
   ['rifle', { target: 'steel', targetDist: 320, payload: 0.2, env: 'urban' }],
+  ['pew', { seqCount: 3, seqJitter: 0.3, env: 'indoor' }],
+  ['plasmabolt', { D: 6, miss: 1.5, targetDist: 12, env: 'indoor' }],
+  ['plasmabolt', { D: 3, miss: 0.8, bvTone: 1100, bvSizzle: 0.9, targetDist: 0, tgMat: 'none', env: 'indoor' }],
+  ['nailgun', { lnType: 'none', bvSpeed: 12, bvCal: 45, tgThick: 80, tgSize: 0.8, tgEnergy: 40, targetDist: 0.05 }],
+  ['railgun', { tgMat: 'aluminium', D: 50, seqCount: 2 }],
 ];
 
 const ctx = {};
 vm.runInNewContext(fs.readFileSync(path.join(ROOT, 'reference', 'engine.js'), 'utf8'), ctx);
 const B = ctx.BFX;
 const supported = new Set(execFileSync(bin, ['--list'], { encoding: 'utf8' }).split('\n')
-  .filter((l) => l.trim() && !l.includes('(not yet)')).map((l) => l.split(/\s+/)[0]));
+  .filter((l) => l.trim() && !l.includes('   (')).map((l) => l.split(/\s+/)[0]));
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'be-conf-'));
 let bad = 0, cases = 0, worst = 0;

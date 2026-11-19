@@ -7,7 +7,8 @@
    JavaScript's own Math.round and Math.hypot. tests/conformance.mjs renders every preset both ways and compares.
    Keep it that way: a change here is a change in Ballistic first.
 
-   Kinds so far: projectile (shots, arrows, ricochets, swings, with an explosive payload) and explosion. */
+   Kinds so far: projectile (shots, arrows, ricochets, swings, with an explosive payload), explosion, and blaster
+   (launcher: dispersive line, rail, coil, gas; bolt, beam or slug; a target that ablates, rings, splashes, sizzles). */
 #include <math.h>
 #include <setjmp.h>
 #include <stdint.h>
@@ -230,14 +231,14 @@ static void air_filter(float *b, int n, double r)
 
 /* An analytic pressure shape, integrated over each sample period: A (1 - u) e^(-k u), u = t / T; or, for an
    N-wave, A (1 - 2 t / T). */
-typedef struct { int nwave; double A, T, k; } shape_t;
+typedef struct { int nwave; double A, T, k, mul4; } shape_t;   /* mul4: u = t * mul4 * 4 instead */
 
 static double shape_at(const shape_t *s, double t)
 {
     double u;
     if (s->nwave)
         return s->A * (1 - 2 * t / s->T);
-    u = t / s->T;
+    u = s->mul4 ? t * s->mul4 * 4 : t / s->T;
     return s->k == 1 ? s->A * (1 - u) * exp(-u) : s->A * (1 - u) * exp(-s->k * u);
 }
 
@@ -424,7 +425,7 @@ static float *blast_buf(arena *ar, const pblast_t *b, rng_t *r, int *len_out)
     double T1 = b->T1, T2 = T1 * 6, a, lp = 0, norm, t, w;
     int len = (int)ceil((0.06 + b->jetTau * 7 + T2 * 8) * FS) + 2400, i, s0;
     float *buf = fnew(ar, len);
-    shape_t s1, s2;
+    shape_t s1 = { 0 }, s2 = { 0 };
     /* Friedlander: instant rise, exponential decay, negative phase */
     s1.nwave = 0; s1.A = b->peak; s1.T = T1; s1.k = 1;
     add_shape(buf, len, 0.0005, T1 * 10, &s1);
@@ -449,7 +450,7 @@ static float *crack_buf(arena *ar, const crack_t *c, int *len_out)
 {
     int len = (int)ceil((c->dur + 0.02) * FS) + 2400;
     float *buf = fnew(ar, len);
-    shape_t s;
+    shape_t s = { 0 };
     s.nwave = 1; s.A = c->peak; s.T = c->dur; s.k = 0;
     add_shape(buf, len, 0.0005, c->dur, &s);
     *len_out = len;
@@ -1030,7 +1031,7 @@ static void explosion_layers(scene_t *sc, const xplan_t *pl, const xopt_t *o, rn
     float *buf;
     int n, i, len;
     if (o->gBlast > 0) {
-        shape_t s;
+        shape_t s = { 0 };
         double t2;
         len = (int)ceil((b->td * 14 + 0.02) * FS) + 2400;
         buf = fnew(ar, len);
@@ -1105,9 +1106,1122 @@ static void explosion_layers(scene_t *sc, const xplan_t *pl, const xopt_t *o, rn
     }
 }
 
-/* ------------------------------------------------------------------ projectile */
+/* the four layer groups' gains of one repetition, when it starts, its pan */
 typedef struct { double g1, g2, g3, g4, t0, pan, ground; } gains_t;
 
+/* ------------------------------------------------------------------ blaster: launcher, bolt in flight, target */
+static float fsin(double cyc) { return SINT[(int)((cyc - floor(cyc)) * 8192) & 8191]; }
+
+static double js_hypot3(double a, double b, double c)
+{
+    double v[3], max = 0, sum = 0, comp = 0, n, summand, pre;
+    int i;
+    v[0] = fabs(a); v[1] = fabs(b); v[2] = fabs(c);
+    for (i = 0; i < 3; i++)
+        if (v[i] > max)
+            max = v[i];
+    if (max == 0)
+        return 0;
+    for (i = 0; i < 3; i++) {
+        n = v[i] / max;
+        summand = n * n - comp;
+        pre = sum + summand;
+        comp = (pre - sum) - summand;
+        sum = pre;
+    }
+    return sqrt(sum) * max;
+}
+
+static float *stretch(arena *ar, const float *x, int M, double s, int *n_out);
+
+enum { LN_NONE, LN_LINE, LN_RAIL, LN_COIL, LN_GAS };
+enum { BV_NONE, BV_BOLT, BV_BEAM, BV_SLUG };
+
+typedef struct { double f, a, t60; } bmode_t;
+typedef struct { double d, g; } bpath_t;
+typedef struct { double kap; bpath_t *paths; int np; bmode_t *modes; int nm; double fLo, eta, tailMax, tail; } bend_t;
+typedef struct { double Lw; double *f, *tau; int K; double *em, *eg; int ne; double tFirst, tEnd, tThump, fTrans, fLo; } line_t;
+typedef struct { double t, v, d; } stage_t;
+typedef struct {
+    int type;
+    double tC, transit;
+    line_t line;
+    bend_t rail, rail2;
+    stage_t *stages;
+    int ns;
+    double Lb, pipe, helm;
+} launcher_t;
+typedef struct { double x, r, ta, pan, pk; } seg_t;
+typedef struct { double Rc, Tn; seg_t *segs; int n; double ds; } channel_t;
+typedef struct {
+    int type;
+    double xEnd, flight;
+    int pulses;
+    double period, v;
+    channel_t ch;
+    int has_tr;
+    traj_t tr;
+    proj_t fp;
+    proj_an an;
+    double mass, vHit;
+    int reached;
+} bolt_t;
+typedef struct { double te, E; } thit_t;
+typedef struct {
+    const be_ablation *A;
+    const char *mat;
+    double x, rT, pan, E;
+    thit_t *hits;
+    int nh;
+    double abl;
+    int has_plate;
+    bend_t plate;
+} target_t;
+typedef struct { launcher_t ln; bolt_t bo; int has_tg; target_t tg; double exitT, r0, pan0; } weapon_t;
+
+static int launcher_of(const char *s)
+{
+    if (!strcmp(s, "none")) return LN_NONE;
+    if (!strcmp(s, "line")) return LN_LINE;
+    if (!strcmp(s, "rail")) return LN_RAIL;
+    if (!strcmp(s, "coil")) return LN_COIL;
+    if (!strcmp(s, "gas")) return LN_GAS;
+    return -1;
+}
+
+static int bolt_of(const char *s)
+{
+    if (!strcmp(s, "none")) return BV_NONE;
+    if (!strcmp(s, "bolt")) return BV_BOLT;
+    if (!strcmp(s, "beam")) return BV_BEAM;
+    if (!strcmp(s, "slug")) return BV_SLUG;
+    return -1;
+}
+
+static const be_body *body_find(const char *id)
+{
+    int i;
+    for (i = 0; i < BODY_COUNT; i++)
+        if (!strcmp(BODIES[i].id, id))
+            return &BODIES[i];
+    return 0;
+}
+
+static const be_plate *plate_find(const char *id)
+{
+    int i;
+    for (i = 0; i < PLATE_COUNT; i++)
+        if (!strcmp(PLATES[i].id, id))
+            return &PLATES[i];
+    return 0;
+}
+
+static const be_ablation *ablation_find(const char *id)
+{
+    int i;
+    for (i = 0; i < ABLATION_COUNT; i++)
+        if (!strcmp(ABLATION[i].id, id))
+            return &ABLATION[i];
+    return 0;
+}
+
+/* the struck dispersive line: its sweep (frequency against arrival time) and its echoes */
+static void plan_line(arena *ar, const be_params *p, line_t *pl)
+{
+    double Lw = PV(p, bpLength), kap = PV(p, bpStiff), cT = PV(p, bpTension) < 2 ? 0 : PV(p, bpTension);
+    int i, j, K = 0, ne = 1, maxe = (int)js_round(PV(p, bpEchoes));
+    pl->f = dnew(ar, 321);
+    pl->tau = dnew(ar, 321);
+    for (i = 0; i <= 320; i++) {
+        double k = 1e-3 * pow(1e7, i / 320.0), w = k * sqrt(cT * cT + kap * kap * k * k), fq = w / TAU;
+        if (fq < 40 || fq > 18000)
+            continue;
+        pl->f[K] = fq;
+        pl->tau[K] = Lw * w / (cT * cT * k + 2 * kap * kap * k * k * k);
+        K++;
+    }
+    pl->em = dnew(ar, (maxe > 0 ? maxe : 0) + 1);
+    pl->eg = dnew(ar, (maxe > 0 ? maxe : 0) + 1);
+    pl->em[0] = 1;
+    pl->eg[0] = 1;
+    for (j = 1; j <= maxe; j++) {
+        if ((2 * j + 1) * pl->tau[0] > 6)
+            break;
+        pl->em[ne] = 2 * j + 1;
+        pl->eg[ne] = pow(PV(p, bpRefl), j);
+        ne++;
+    }
+    pl->Lw = Lw;
+    pl->K = K;
+    pl->ne = ne;
+    pl->tFirst = pl->tau[K - 1];
+    pl->tEnd = pl->em[ne - 1] * pl->tau[0];
+    pl->tThump = cT ? Lw / cT : 0;
+    pl->fTrans = cT ? sqrt(2.0) * cT * cT / (TAU * kap) : 0;
+    pl->fLo = pl->f[0];
+}
+
+static void chirp_into(float *buf, int len, const line_t *pl, const be_params *p, double m, double gain)
+{
+    const double *f = pl->f, *tau = pl->tau;
+    int j = pl->K - 1, n0 = (int)ceil(m * tau[j] * FS), n1 = (int)mind(len - 1, floor(m * tau[0] * FS)), n;
+    double ph = 0, fh = PV(p, bpHard), dk = PV(p, bpDamp) * 0.02 * m * pl->Lw;
+    for (n = n0; n <= n1; n++) {
+        double tm = n / FS / m, w, fq, dfdt;
+        while (j > 0 && tau[j - 1] < tm)
+            j--;
+        if (j == 0)
+            break;
+        w = (tm - tau[j]) / (tau[j - 1] - tau[j]);
+        fq = f[j] * pow(f[j - 1] / f[j], w);
+        /* stationary phase: amplitude follows the square root of the sweep rate */
+        dfdt = mind(3e6, (f[j] - f[j - 1]) / (m * (tau[j - 1] - tau[j])));
+        ph += fq / FS;
+        buf[n] = (float)(buf[n] + gain * sqrt(dfdt) / (1 + (fq / fh) * (fq / fh)) * exp(-dk * fq / 1000) *
+                         mind(1, (n - n0) / 32.0) * fsin(ph));
+    }
+}
+
+static void damped_sine(float *buf, int len, double t0, double f, double q, double amp)
+{
+    int n0 = (int)js_round(t0 * FS), n, i;
+    double tau = q / (PI * f);
+    n = (int)mind(len - n0, ceil(tau * 7 * FS));
+    for (i = 0; i < n; i++) {
+        double t = i / FS;
+        buf[n0 + i] = (float)(buf[n0 + i] + amp * exp(-t / tau) * fsin(f * t) * mind(1, i / 24.0));
+    }
+}
+
+static void noise_burst(arena *ar, float *buf, int len, double t0, double dur, double hp, double lp, double amp, rng_t *r,
+                        double attack)
+{
+    int n0 = (int)js_round(t0 * FS), n = (int)mind(len - n0, ceil(dur * 5 * FS)), i;
+    float *b;
+    double pk;
+    if (n < 8)
+        return;
+    b = fnew(ar, n);
+    for (i = 0; i < n; i++)
+        b[i] = (float)(rnd(r) * 2 - 1);
+    if (lp) { one_pole_lp(b, n, lp); one_pole_lp(b, n, lp); }
+    if (hp) one_pole_hp(b, n, hp);
+    pk = peak_of(b, 0, n);
+    if (!pk)
+        pk = 1;
+    for (i = 0; i < n; i++) {
+        double t = i / FS;
+        buf[n0 + i] = (float)(buf[n0 + i] + amp * b[i] / pk * exp(-t / dur) * mind(1, t / (attack ? attack : 0.0005)));
+    }
+}
+
+static void add_n(float *buf, int len, double t0, double dur, double peak)
+{
+    int n0 = (int)maxd(0, floor(t0 * FS)), n1 = (int)mind(len - 1, ceil((t0 + dur) * FS)), n, k;
+    for (n = n0; n <= n1; n++) {
+        double acc = 0, t;
+        for (k = 0; k < 4; k++) {
+            t = (n + (k + 0.5) / 4) / FS - t0;
+            if (t >= 0 && t <= dur)
+                acc += 1 - 2 * t / dur;
+        }
+        buf[n] = (float)(buf[n] + peak * acc / 4);
+    }
+}
+
+/* charger whine: converter pitch climbs along the capacitor charge curve, then stops dead at the discharge */
+static float *charge_whine(arena *ar, double dur, double fEnd, int *len_out)
+{
+    int cn = (int)ceil(dur * FS), i;
+    float *cb = fnew(ar, cn + 2400);
+    double ph = 0, k1 = 1 - exp(-3);
+    for (i = 0; i < cn; i++) {
+        double u = (double)i / cn, f = 1500 + (fEnd - 1500) * (1 - exp(-3 * u)) / k1;
+        ph += f / FS;
+        cb[i] = (float)((fsin(ph) + 0.3 * fsin(2 * ph) + 0.15 * fsin(0.5 * ph)) * (0.15 + 0.85 * u) * mind(1, i / 480.0) *
+                        mind(1, (cn - i) / 96.0));
+    }
+    *len_out = cn + 2400;
+    return cb;
+}
+
+/* Bending waves: after a distance d, frequency f arrives at t = d / (2 sqrt(2 pi kappa f)), a falling sweep. */
+static void bend_chirp(float *buf, int len, double t0, double d, double kap, double gain, double fHi, double fLo, double eta,
+                       double hard, double ph0)
+{
+    double K = d * d / (8 * PI * kap), ta = sqrt(K / fHi), tb = sqrt(K / maxd(fLo, 1));
+    int n0 = (int)ceil((t0 + ta) * FS), n1 = (int)mind(len - 1, floor((t0 + tb) * FS)), fade, n, q = 0;
+    fade = (int)maxd(8, mind(512, (n1 - n0) >> 2));
+    for (n = n0; n <= n1; n++) {
+        double t = n / FS - t0, f = K / (t * t), sw = 2 * K / (t * t * t);
+        double a = gain * sqrt(sw) / (1 + (f / hard) * (f / hard)) * exp(-PI * eta * f * t);
+        if (q < 24) a *= ++q / 24.0;
+        if (n1 - n < fade) a *= (double)(n1 - n) / fade;
+        buf[n] = (float)(buf[n] + a * fsin(ph0 + K * (1 / ta - 1 / t)));
+    }
+}
+
+/* The struck body as an impulse response: dispersive sweeps along the strongest paths, then its modes ring on. Peak 1. */
+static float *bend_ir(arena *ar, bend_t *s, double hard, rng_t *r, int *len_out)
+{
+    double tEnd = 0, tTail = 0, pc, pt;
+    int i, n, k;
+    float *ir, *tl;
+    for (k = 0; k < s->np; k++) {
+        double tb = s->paths[k].d / (2 * sqrt(TAU * s->kap * s->fLo));
+        if (tb > tEnd) tEnd = tb;
+    }
+    for (k = 0; k < s->nm; k++) {
+        s->modes[k].t60 = mind(s->tailMax, 2.2 / (s->eta * s->modes[k].f));
+        if (s->modes[k].t60 > tTail) tTail = s->modes[k].t60;
+    }
+    n = (int)ceil((mind(maxd(tEnd, tTail), 6) + 0.05) * FS);
+    ir = fnew(ar, n);
+    tl = fnew(ar, n);
+    for (k = 0; k < s->np; k++) {
+        double ph0 = rnd(r);
+        bend_chirp(ir, n, 0, s->paths[k].d, s->kap, s->paths[k].g, mind(16000, hard * 2.5), s->fLo, s->eta, hard, ph0);
+    }
+    for (k = 0; k < s->nm; k++) {
+        const bmode_t *md = &s->modes[k];
+        double R = pow(10, -3 / (md->t60 * FS)), w = TAU * md->f / FS, c1 = 2 * R * cos(w), c2 = R * R, y1 = R * sin(w), y2 = 0, y;
+        double A = md->a / (1 + (md->f / hard) * (md->f / hard));
+        int nn = (int)mind(n, ceil(md->t60 * FS));
+        tl[1] = (float)(tl[1] + A * y1);
+        for (i = 2; i < nn; i++) {
+            y = c1 * y1 - c2 * y2;
+            y2 = y1;
+            y1 = y;
+            tl[i] = (float)(tl[i] + A * y);
+        }
+    }
+    pc = peak_of(ir, 0, n);
+    if (!pc) pc = 1;
+    pt = peak_of(tl, 0, n);
+    if (!pt) pt = 1;
+    for (i = 0; i < n; i++)
+        ir[i] = (float)(ir[i] / pc + s->tail * tl[i] / pt);
+    to_peak(ir, n, 1);
+    *len_out = n;
+    return ir;
+}
+
+static void sort_paths(bpath_t *p, int n)      /* loudest first, stable */
+{
+    int i, j;
+    for (i = 1; i < n; i++) {
+        bpath_t x = p[i];
+        for (j = i - 1; j >= 0 && p[j].g < x.g; j--)
+            p[j + 1] = p[j];
+        p[j + 1] = x;
+    }
+}
+
+/* A rectangular plate: edge reflections as image sources, simply supported modes for the long ring. */
+static void plan_plate(arena *ar, const be_plate *m, double h, double size, bend_t *out)
+{
+    double kap = h * sqrt(m->E / (12 * m->rho * (1 - m->nu * m->nu))), a = size, b = size * 0.72, x0 = 0.37 * a, y0 = 0.41 * b;
+    double xo = 0.63 * a, yo = 0.57 * b, f11;
+    int i, j, sx, sy, np = 0, nm = 0;
+    bpath_t *paths = (bpath_t *)ar_alloc(ar, 484 * sizeof *paths);
+    bmode_t *modes = (bmode_t *)ar_alloc(ar, 900 * sizeof *modes);
+    for (i = -5; i <= 5; i++)
+        for (j = -5; j <= 5; j++)
+            for (sx = 0; sx < 2; sx++)
+                for (sy = 0; sy < 2; sy++) {
+                    double X = 2 * i * a + (sx ? -x0 : x0), Y = 2 * j * b + (sy ? -y0 : y0), d = maxd(0.02, js_hypot(X - xo, Y - yo));
+                    paths[np].d = d;
+                    paths[np].g = pow(0.9, abs(2 * i - sx) + abs(2 * j - sy)) / sqrt(d);
+                    np++;
+                }
+    sort_paths(paths, np);
+    f11 = PI / 2 * kap * (1 / (a * a) + 1 / (b * b));
+    for (i = 1; i <= 30; i++)
+        for (j = 1; j <= 30; j++) {
+            double f = PI / 2 * kap * (i * i / (a * a) + j * j / (b * b)), w;
+            if (f < 20 || f > 10000)
+                continue;
+            w = sin(i * PI * x0 / a) * sin(j * PI * y0 / b) * sin(i * PI * xo / a) * sin(j * PI * yo / b);
+            if (fabs(w) > 0.05) {
+                modes[nm].f = f;
+                modes[nm].a = w;
+                nm++;
+            }
+        }
+    for (i = 1; i < nm; i++) {                 /* by frequency, stable */
+        bmode_t x = modes[i];
+        for (j = i - 1; j >= 0 && modes[j].f > x.f; j--)
+            modes[j + 1] = modes[j];
+        modes[j + 1] = x;
+    }
+    if (nm > 64) {
+        /* keep 64 spread over the band; each stands for the ones skipped around it */
+        double st = nm / 64.0;
+        bmode_t *kept = (bmode_t *)ar_alloc(ar, 64 * sizeof *kept);
+        for (i = 0; i < 64; i++) {
+            const bmode_t *md = &modes[(int)floor(i * st)];
+            kept[i].f = md->f;
+            kept[i].a = md->a * sqrt(st);
+        }
+        modes = kept;
+        nm = 64;
+    }
+    out->kap = kap;
+    out->paths = paths;
+    out->np = np < 40 ? np : 40;
+    out->modes = modes;
+    out->nm = nm;
+    out->fLo = maxd(f11, 25);
+    out->eta = m->eta;
+    out->tailMax = 3;
+    out->tail = 0.4;
+}
+
+/* A rail: a free-free steel bar 4 cm deep, struck near the breech and heard from its middle. */
+static void plan_rail(arena *ar, double L, bend_t *out)
+{
+    static const double beta[5] = { 4.730, 7.853, 10.996, 14.137, 17.279 };
+    double kap = 0.04 / sqrt(12) * sqrt(200e9 / 7850), xs = 0.05 * L, xo = 0.5 * L;
+    int k, np = 0, nm = 0;
+    bpath_t *paths = (bpath_t *)ar_alloc(ar, 26 * sizeof *paths);
+    bmode_t *modes = (bmode_t *)ar_alloc(ar, 60 * sizeof *modes);
+    for (k = -6; k <= 6; k++) {
+        paths[np].d = maxd(0.05, fabs(2 * k * L + xs - xo));
+        paths[np].g = pow(0.85, abs(2 * k));
+        np++;
+        paths[np].d = maxd(0.05, fabs(2 * k * L - xs - xo));
+        paths[np].g = pow(0.85, abs(2 * k - 1));
+        np++;
+    }
+    sort_paths(paths, np);
+    for (k = 0; k < 60; k++) {
+        double bl = k < 5 ? beta[k] : (k + 1.5) * PI, f = bl * bl * kap / (TAU * L * L);
+        if (f > 9000)
+            break;
+        if (f > 20) {
+            modes[nm].f = f;
+            modes[nm].a = (k & 1 ? -1 : 1) / sqrt(1 + k);
+            nm++;
+        }
+    }
+    out->kap = kap;
+    out->paths = paths;
+    out->np = 16;
+    out->modes = modes;
+    out->nm = nm;
+    out->fLo = 30;
+    out->eta = 0.008;
+    out->tailMax = 2.5;
+    out->tail = 0.5;
+}
+
+/* Line launcher: the struck dispersive line with its echoes, thump and body, all on the launcher level. */
+static void line_launcher(scene_t *sc, const line_t *pl, const be_params *p, double gL, double tA, double pan, double r)
+{
+    arena *ar = sc->ar;
+    int nD, nE, i, j, k;
+    float *dir, *ech;
+    double amp1, scl, pkd;
+    push_event(sc, BE_EVENT_CRACK, tA + pl->tFirst);
+    if (gL <= 0)
+        return;
+    nD = (int)ceil((pl->tau[0] + 0.06) * FS);
+    nE = (int)ceil((pl->tEnd + 0.06) * FS);
+    dir = fnew(ar, nD + 64);
+    ech = fnew(ar, nE + 64);
+    amp1 = 3 * sqrt(PV(p, bpEnergy));
+    chirp_into(dir, nD + 64, pl, p, 1, 1);
+    for (j = 1; j < pl->ne; j++)
+        chirp_into(ech, nE + 64, pl, p, pl->em[j], pl->eg[j]);
+    pkd = peak_of(dir, 0, nD + 64);
+    scl = amp1 / (pkd ? pkd : 1);
+    scale(dir, nD + 64, scl);
+    scale(ech, nE + 64, scl);
+    if (strcmp(PS(p, bpBody), "none")) {
+        const be_body *bd = body_find(PS(p, bpBody));
+        int bn = nE + (int)ceil(0.5 * FS);
+        float *body = fnew(ar, bn);
+        for (k = 0; k < bd->nf; k++) {
+            double bf = bd->f[k], R = exp(-PI * bf / (bd->q * FS)), c1 = 2 * R * cos(TAU * bf / FS), c2 = R * R, y1 = 0, y2 = 0, y;
+            double g = 1 / (1 + k * 0.5);
+            for (i = 0; i < bn; i++) {
+                y = c1 * y1 - c2 * y2 + (i < nD ? dir[i] : 0) + (i < nE ? ech[i] : 0);
+                y2 = y1;
+                y1 = y;
+                body[i] = (float)(body[i] + g * y);
+            }
+        }
+        to_peak(body, bn, 0.8 * amp1);
+        scale(body, bn, 1 / r); air_filter(body, bn, r); push_mono(sc, body, bn, tA, pan, gL);
+    }
+    if (pl->tThump > 0) {
+        double fL = clampd(pl->fTrans * 0.5, 40, 400);
+        int tn = nE + (int)ceil(0.2 * FS);
+        float *th = fnew(ar, tn);
+        for (k = 0; k < pl->ne; k++) {
+            shape_t s = { 0 };
+            s.A = 0.8 * amp1 * pl->eg[k];
+            s.k = 1;
+            s.mul4 = fL;
+            add_shape(th, tn, pl->em[k] * pl->tThump, 3 / fL, &s);
+        }
+        scale(th, tn, 1 / r); air_filter(th, tn, r); push_mono(sc, th, tn, tA, pan, gL);
+        push_event(sc, BE_EVENT_IMPACT, tA + pl->tThump);
+    }
+    scale(dir, nD + 64, 1 / r); air_filter(dir, nD + 64, r); push_mono(sc, dir, nD + 64, tA, pan, gL);
+    if (pl->ne > 1) {
+        scale(ech, nE + 64, 1 / r); air_filter(ech, nE + 64, r); push_mono(sc, ech, nE + 64, tA, pan, gL);
+    }
+}
+
+static void plan_launcher(arena *ar, const be_params *q, double vExit, launcher_t *out)
+{
+    int t = launcher_of(PS(q, lnType)), i;
+    memset(out, 0, sizeof *out);
+    out->type = t;
+    if ((t == LN_RAIL || t == LN_COIL) && PV(q, lnCharge) > 0.05)
+        out->tC = PV(q, lnCharge);
+    if (t == LN_LINE)
+        plan_line(ar, q, &out->line);
+    else if (t == LN_RAIL) {
+        plan_rail(ar, PV(q, lnLength), &out->rail);
+        plan_rail(ar, PV(q, lnLength) * 1.013, &out->rail2);
+        out->transit = PV(q, lnLength) / maxd(vExit / 2, 50);
+    } else if (t == LN_COIL) {
+        /* each stage adds the same energy: the stages fire closer and closer together, each pull shorter */
+        int N = (int)clampd(js_round(PV(q, lnStages)), 2, 24);
+        double s = PV(q, lnLength) / N, tt = 0, vPrev = 0;
+        out->stages = (stage_t *)ar_alloc(ar, N * sizeof(stage_t));
+        for (i = 1; i <= N; i++) {
+            double vi = maxd(vExit, 5) * sqrt((double)i / N), dt = s / maxd((vPrev + vi) / 2, 2.5);
+            out->stages[i - 1].t = tt;
+            out->stages[i - 1].v = vi;
+            out->stages[i - 1].d = clampd(dt / 2, 0.0001, 0.08);
+            tt += dt;
+            vPrev = vi;
+        }
+        out->ns = N;
+        out->transit = tt;
+    } else if (t == LN_GAS) {
+        double Lb = clampd(PV(q, lnLength), 0.05, 2);
+        out->Lb = Lb;
+        out->pipe = C_AIR / (4 * (Lb + 0.006));                                        /* barrel: a quarter-wave pipe */
+        out->helm = C_AIR / TAU * sqrt(2.83e-5 / (PV(q, lnChamber) * 1e-6 * 0.012));   /* chamber behind a 6 mm port */
+        out->transit = 0.007;
+    }
+}
+
+static void put_at(scene_t *sc, float *b, int n, double t, double pan, double g, double r)
+{
+    scale(b, n, 1 / r);
+    air_filter(b, n, r);
+    push_mono(sc, b, n, t, pan, g);
+}
+
+static void launcher_layers(scene_t *sc, launcher_t *ln, const be_params *p, double gL, double t0, double r0, double pan0,
+                            rng_t *r)
+{
+    arena *ar = sc->ar;
+    double tA, tF, E = PV(p, lnEnergy), lvl;
+    float *buf;
+    int len, i, k;
+    if (ln->type == LN_NONE)
+        return;
+    tA = t0 + r0 / C_AIR;
+    tF = tA + ln->tC;
+    lvl = 3 * sqrt(maxd(E, 1));   /* Pa at 1 m for the launcher's loudest part: set against the bolt, not measured */
+    if (ln->tC > 0) {
+        push_event(sc, BE_EVENT_PASS, tA);
+        if (gL > 0) {
+            buf = charge_whine(ar, ln->tC, PV(p, lnChargeHz), &len);
+            to_peak(buf, len, 0.05 * lvl);
+            put_at(sc, buf, len, tA, pan0, gL, r0);
+        }
+    }
+    if (ln->type == LN_LINE) {
+        line_launcher(sc, &ln->line, p, gL, tF, pan0, r0);
+        return;
+    }
+    push_event(sc, BE_EVENT_LAUNCH, tF);
+    if (gL <= 0)
+        return;
+    if (ln->type == LN_RAIL) {
+        /* capacitor dump: switch crack and LC ring, then the armature arc along the rails and a plasma flash */
+        xblast_t b;
+        shape_t s = { 0 };
+        float *fb, *ir1, *ir2;
+        int fn, n1, n2;
+        len = (int)ceil(1.2 * FS);
+        buf = fnew(ar, len);
+        add_n(buf, len, 0.0005, 0.00012, 0.5 * lvl);
+        damped_sine(buf, len, 0.0005, PV(p, lnRingHz), 9, 0.35 * lvl);
+        noise_burst(ar, buf, len, 0.0005, maxd(ln->transit, 0.004) * 0.6, 900, 9000, 0.45 * lvl, r, 0.0003);
+        put_at(sc, buf, len, tF, pan0, gL, r0);
+        b = blast_params(clampd(E * 0.02 / 4.184e6, 1e-7, 50), maxd(r0, 0.5));
+        fn = (int)ceil((b.td * 14 + 0.02) * FS) + 2400;
+        fb = fnew(ar, fn);
+        s.A = b.peak; s.T = b.td; s.k = 1.2;
+        add_shape(fb, fn, 0.0005, b.td * 9, &s);
+        air_filter(fb, fn, r0);
+        push_mono(sc, fb, fn, tF + ln->transit, pan0, gL);
+        /* the rails ring: bending waves from the breech, reflected at the free ends, then the bar modes */
+        ir1 = bend_ir(ar, &ln->rail, 8000, r, &n1);
+        ir2 = bend_ir(ar, &ln->rail2, 8000, r, &n2);
+        to_peak(ir1, n1, 0.5 * lvl);
+        to_peak(ir2, n2, 0.4 * lvl);
+        put_at(sc, ir1, n1, tF, clampd(pan0 - 0.25, -1, 1), gL, r0);
+        put_at(sc, ir2, n2, tF + 0.0003, clampd(pan0 + 0.25, -1, 1), gL, r0);
+        buf = modal_hit(ar, be_material_find("steel"), E * 0.001, clampd(2 / PV(p, lnLength), 0.2, 2), r, 0, 0, 0, &len);
+        to_peak(buf, len, 0.4 * lvl);
+        put_at(sc, buf, len, tF + ln->transit, pan0, gL, r0);
+    } else if (ln->type == LN_COIL) {
+        len = (int)ceil((ln->transit + 0.8) * FS);
+        buf = fnew(ar, len);
+        for (k = 0; k < ln->ns; k++) {
+            const stage_t *s = &ln->stages[k];
+            int n0, nn;
+            double a;
+            add_n(buf, len, s->t + 0.0003, 0.00008, 0.25 * lvl);   /* thyristor switch click */
+            /* the coil pulls while the slug crosses it: one cycle of force, shorter at every stage */
+            n0 = (int)js_round((s->t + 0.0003) * FS);
+            nn = (int)js_round(2 * s->d * FS);
+            a = 0.6 * lvl * sqrt((double)(k + 1) / ln->ns);
+            for (i = 0; i < nn && n0 + i < len; i++) {
+                double u = (double)i / nn;
+                buf[n0 + i] = (float)(buf[n0 + i] + a * sin(PI * u) * sin(TAU * u));
+            }
+            damped_sine(buf, len, s->t + 0.0003, clampd(1 / s->d, 200, 6000), 6, 0.12 * lvl);
+            if (k)
+                push_event(sc, BE_EVENT_PASS, tF + s->t);
+        }
+        damped_sine(buf, len, ln->transit, PV(p, lnRingHz), 9, 0.25 * lvl);
+        put_at(sc, buf, len, tF, pan0, gL, r0);
+    } else if (ln->type == LN_GAS) {
+        float *ph, *ck;
+        int pn, cn;
+        const be_material *steel = be_material_find("steel");
+        len = (int)ceil(1.0 * FS);
+        buf = fnew(ar, len);
+        noise_burst(ar, buf, len, 0, 0.02, 1500, 9000, 0.5 * lvl, r, 0.0004);           /* valve opens */
+        damped_sine(buf, len, 0.002, ln->helm, 8, 0.35 * lvl);                          /* chamber pops (Helmholtz) */
+        ph = modal_hit(ar, steel, 2, 1.6, r, 6, 0.5, 1, &pn);
+        to_peak(ph, pn, 0.45 * lvl);
+        add_at(buf, len, ph, pn, 0.004, 1);                                             /* driver blade strikes */
+        for (k = 1; k <= 7; k += 2)
+            damped_sine(buf, len, ln->transit, ln->pipe * k, 30, 0.3 * lvl / k);         /* barrel rings */
+        if (PV(p, lnSpring) > 0.01) {
+            /* the return spring twangs: waves on a helix are dispersive too */
+            int sn = (int)ceil(0.6 * FS);
+            float *sp = fnew(ar, sn);
+            for (k = 0; k < 6; k++) {
+                double ph0 = rnd(r);
+                bend_chirp(sp, sn, 0, 0.6 * (2 * k + 1), 0.15, pow(0.8, k), 9000, 60, 0.01, 5000, ph0);
+            }
+            to_peak(sp, sn, 0.3 * lvl * PV(p, lnSpring));
+            add_at(buf, len, sp, sn, 0.022, 1);
+        }
+        ck = modal_hit(ar, steel, 0.6, 2.2, r, 4, 0.3, 1, &cn);
+        to_peak(ck, cn, 0.3 * lvl);
+        add_at(buf, len, ck, cn, 0.045, 1);                                             /* driver returns */
+        noise_burst(ar, buf, len, 0.06, 0.12, 400, 6000, 0.18 * lvl, r, 0.004);        /* exhaust */
+        put_at(sc, buf, len, tF, pan0, gL, r0);
+    }
+}
+
+/* A straight heated channel: each stretch sends an N-wave about 2.6 Rc / c long, Rc = sqrt(E per metre / (pi P0)). */
+static void plan_channel(arena *ar, double L, double El, double D, double miss, double v, rng_t *r, channel_t *out)
+{
+    double Rc = sqrt(El / (PI * P0)), ds, r0;
+    int n = (int)maxd(2, ceil(L / maxd(4 * Rc, L / 240))), i;
+    ds = L / n;
+    r0 = maxd(ds / 2, Rc);
+    out->segs = (seg_t *)ar_alloc(ar, n * sizeof(seg_t));
+    for (i = 0; i < n; i++) {
+        seg_t *s = &out->segs[i];
+        double x = (i + 0.5) * ds, q1 = rnd(r), y = (q1 - 0.5) * 0.15 * ds, q2 = rnd(r), z = (q2 - 0.5) * 0.15 * ds;
+        double rr = maxd(maxd(js_hypot3(D - x, miss - y, z), Rc), 0.05);
+        s->x = x;
+        s->r = rr;
+        s->ta = x / v + rr / C_AIR;
+        s->pan = clampd((x - D) / rr, -1, 1) * 0.9;
+        s->pk = 0.2 * P0 * pow(Rc / r0, 0.75) * r0 / maxd(rr, r0) * mind(1, ds / (2 * r0));
+    }
+    out->Rc = Rc;
+    out->Tn = 2.6 * Rc / C_AIR;
+    out->n = n;
+    out->ds = ds;
+}
+
+static void traj_kin(arena *ar, double dur, double D, double miss, double v, traj_t *tr)
+{
+    int n = (int)js_round(dur * TRAJ_HZ) + 1, i;
+    tr->x = dnew(ar, n);
+    tr->v = dnew(ar, n);
+    tr->T = dnew(ar, n);
+    for (i = 0; i < n; i++) {
+        double t = i / TRAJ_HZ;
+        tr->x[i] = v * t;
+        tr->T[i] = t + js_hypot(D - tr->x[i], miss) / C_AIR;
+        tr->v[i] = i ? (tr->x[i] - tr->x[i - 1]) * TRAJ_HZ : 0;
+    }
+    if (n > 1)
+        tr->v[0] = tr->v[1];
+    tr->n = n;
+    tr->hit = 0;
+    tr->xEnd = 0;
+}
+
+static void plan_bolt(arena *ar, const be_params *q, rng_t *r, bolt_t *out)
+{
+    int t = bolt_of(PS(q, bvType));
+    int target = strcmp(PS(q, tgMat), "none") != 0;
+    double xEnd = target ? PV(q, targetDist) : PV(q, D) + clampd(20 * PV(q, miss), 20, 400);
+    memset(out, 0, sizeof *out);
+    out->type = t;
+    out->xEnd = maxd(0.1, xEnd);
+    out->pulses = 1;
+    if (t == BV_BOLT || t == BV_BEAM) {
+        double v = t == BV_BEAM ? 3e8 : maxd(PV(q, bvSpeed), 5);
+        out->v = v;
+        plan_channel(ar, out->xEnd, PV(q, bvChannel), PV(q, D), PV(q, miss), v, r, &out->ch);
+        out->flight = out->xEnd / v;
+        if (t == BV_BEAM) {
+            out->pulses = (int)clampd(js_round(PV(q, bvPulses)), 1, 60);
+            out->period = 1 / maxd(PV(q, bvRate), 1);
+        } else {
+            traj_kin(ar, out->flight, PV(q, D), PV(q, miss), v, &out->tr);
+            out->has_tr = 1;
+        }
+    } else if (t == BV_SLUG) {
+        double d = PV(q, bvCal) / 1000, lr = !strcmp(PS(q, lnType), "gas") ? 20 : 3;
+        proj_t *fp = &out->fp;
+        memset(fp, 0, sizeof *fp);
+        fp->v0 = PV(q, bvSpeed);
+        fp->cal = PV(q, bvCal);
+        fp->mass = 7800 * PI / 4 * d * d * lr * d;
+        fp->lenRatio = lr;
+        fp->cdScale = 1;
+        fp->tumbleHz = 200;
+        fp->pathLen = target ? maxd(0.05, PV(q, targetDist)) : 0;
+        fp->D = PV(q, D);
+        fp->miss = PV(q, miss);
+        fp->launch = LAUNCH_NONE;
+        fp->maxT = 6;
+        analyze_proj(ar, fp, &out->an);
+        out->v = PV(q, bvSpeed);
+        out->mass = fp->mass;
+        out->tr = out->an.tr;
+        out->has_tr = 1;
+        out->flight = (out->tr.n - 1) / TRAJ_HZ;
+        out->vHit = out->tr.v[out->tr.n - 1];
+        out->reached = target && out->tr.x[out->tr.n - 1] >= fp->pathLen * 0.995;
+    }
+}
+
+/* a sustained source on a path: synthesised in emission time, then re-timed to the ear */
+typedef double (*gen_fn)(void *st, int k);
+
+static int moving_source(arena *ar, const traj_t *tr, double D, double miss, gen_fn gen, void *st, stereo_t *out)
+{
+    int n = tr->n, ns = (int)floor((n - 1) / TRAJ_HZ * FS), k, i;
+    double l1 = 0, l2 = 0;
+    float *src;
+    if (ns < 64)
+        return 0;
+    src = fnew(ar, ns);
+    for (k = 0; k < ns; k++) {
+        double u = k / FS * TRAJ_HZ, f, x, dT, rate, rr, s, a;
+        i = (int)mind(n - 2, floor(u));
+        f = u - i;
+        x = tr->x[i] + (tr->x[i + 1] - tr->x[i]) * f;
+        dT = (tr->T[i + 1] - tr->T[i]) * TRAJ_HZ;
+        rate = 1 / maxd(fabs(dT), 0.05);
+        rr = maxd(1, js_hypot(D - x, miss));
+        s = gen(st, k) / rr;
+        a = exp(-TAU * clampd(mind(air_fc(rr), 18000) / rate / 0.64, 30, 20000) / FS);
+        l1 = s + (l1 - s) * a;
+        l2 = l1 + (l2 - l1) * a;
+        src[k] = (float)l2;
+    }
+    return retime(ar, src, ns, tr, D, miss, 0, 0, out);
+}
+
+typedef struct { rng_t *r; double lp0, sh; } sheath_st;
+static double sheath_gen(void *v, int k)
+{
+    sheath_st *s = (sheath_st *)v;
+    double w = rnd(s->r) * 2 - 1;
+    s->lp0 += (w - s->lp0) * 0.3;
+    return 25 * s->sh * (w - s->lp0);
+}
+
+typedef struct { rng_t *r; double ph, lp, ck, hum, sizzle; } voice_st;
+static double voice_gen(void *v, int kk)
+{
+    voice_st *s = (voice_st *)v;
+    double w;
+    s->ph += s->hum * (1 + 0.03 * fsin(kk * 6 / FS)) / FS;
+    w = rnd(s->r) * 2 - 1;
+    s->lp += (w - s->lp) * 0.35;
+    s->ck *= 0.97;
+    if (rnd(s->r) < 0.004)
+        s->ck += (rnd(s->r) - 0.5) * 4;
+    return 8 * s->sizzle * ((fsin(s->ph) + 0.4 * fsin(2 * s->ph + 0.1) + 0.25 * fsin(3 * s->ph + 0.3)) * 0.5 + 0.6 * (w - s->lp) + s->ck);
+}
+
+static void bolt_layers(scene_t *sc, bolt_t *bo, const be_params *p, double gB, double t0, rng_t *r)
+{
+    arena *ar = sc->ar;
+    if (bo->type == BV_NONE)
+        return;
+    if (bo->type == BV_SLUG) {
+        const proj_an *a = &bo->an;
+        const proj_t *fp = &bo->fp;
+        stereo_t wk, mv;
+        double sh;
+        if (a->has_crack)
+            push_event(sc, BE_EVENT_CRACK, t0 + a->crack.t);
+        else if (a->passed)
+            push_event(sc, BE_EVENT_PASS, t0 + a->passT);
+        if (gB <= 0)
+            return;
+        if (a->has_crack) {
+            int len;
+            double rc = js_hypot(fp->D - a->crack.x, fp->miss);
+            float *cb = crack_buf(ar, &a->crack, &len);
+            post_layer(ar, cb, len, rc, PV(p, ground));
+            push_mono(sc, cb, len, t0 + a->crack.t, (a->crack.x - fp->D) / rc * 0.9, gB);
+        }
+        if (wake_layer(ar, fp, &a->tr, bo->reached, r, &wk))
+            push_stereo(sc, wk.L, wk.R, wk.n, t0 + wk.t, gB);
+        /* plasma sheath: above about Mach 4 the air behind the bow shock ionises and sizzles */
+        sh = PV(p, bvSizzle) * clampd((bo->v / C_AIR - 3.5) / 3, 0, 1);
+        if (sh > 0.01) {
+            sheath_st st;
+            st.r = r; st.lp0 = 0; st.sh = sh;
+            if (moving_source(ar, &a->tr, fp->D, fp->miss, sheath_gen, &st, &mv))
+                push_stereo(sc, mv.L, mv.R, mv.n, t0 + mv.t, gB);
+        }
+        return;
+    }
+    {
+        const channel_t *ch = &bo->ch;
+        const seg_t *segs = ch->segs, *close = &segs[0];
+        double tMin = INFINITY, tMax = 0, rMin = INFINITY, rMax = 0, lr, pkAll = 0;
+        int NB = 6, len, k, i, b;
+        float *bL[6] = { 0 }, *bR[6] = { 0 }, *body;
+        double br[6] = { 0 };
+        int bnum[6] = { 0 };
+        for (i = 0; i < ch->n; i++) {
+            if (segs[i].ta < tMin) tMin = segs[i].ta;
+            if (segs[i].ta > tMax) tMax = segs[i].ta;
+            if (segs[i].r < rMin) rMin = segs[i].r;
+            if (segs[i].r > rMax) rMax = segs[i].r;
+        }
+        push_event(sc, BE_EVENT_CRACK, t0 + tMin);
+        if (gB <= 0)
+            return;
+        lr = log(rMax / rMin);
+        if (!lr) lr = 1;
+        len = (int)ceil((tMax - tMin + (bo->pulses - 1) * bo->period * 1.05 + ch->Tn * 4 + 0.12) * FS);
+        for (k = 0; k < bo->pulses; k++) {
+            double q = rnd(r), tp = k * bo->period * (1 + 0.04 * (q - 0.5)), gk = 1;
+            if (k)
+                gk = 0.75 + 0.3 * rnd(r);
+            for (i = 0; i < ch->n; i++) {
+                const seg_t *s = &segs[i];
+                int bi = (int)mind(NB - 1, floor(log(s->r / rMin) / lr * NB));
+                double q1, pk, q2, T, ts;
+                if (!bL[bi]) { bL[bi] = fnew(ar, len); bR[bi] = fnew(ar, len); }
+                q1 = rnd(r);
+                pk = s->pk * gk * (0.6 + 0.8 * q1);
+                q2 = rnd(r);
+                T = ch->Tn * (0.8 + 0.45 * q2);
+                ts = s->ta - tMin + tp + 0.001;
+                if (!k) { br[bi] += s->r; bnum[bi]++; }
+                add_n(bL[bi], len, ts, T, pk * cos((s->pan + 1) * PI / 4));
+                add_n(bR[bi], len, ts, T, pk * sin((s->pan + 1) * PI / 4));
+            }
+        }
+        for (i = 0; i < ch->n; i++)
+            if (segs[i].r < close->r)
+                close = &segs[i];
+        body = fnew(ar, len);
+        for (b = 0; b < NB; b++) {
+            double pk;
+            if (!bL[b])
+                continue;
+            pk = peak_of(bL[b], bR[b], len);
+            if (pk > pkAll) pkAll = pk;
+            for (i = 0; i < len; i++)
+                body[i] = (float)(body[i] + (bL[b][i] + bR[b][i]) * 0.5);
+            air_filter(bL[b], len, br[b] / bnum[b]);
+            air_filter(bR[b], len, br[b] / bnum[b]);
+            push_stereo(sc, bL[b], bR[b], len, t0 + tMin - 0.001, gB);
+        }
+        /* the heated core expands and the air rushes back in behind it: a low whump under the crack */
+        one_pole_lp(body, len, 160); one_pole_lp(body, len, 160); one_pole_lp(body, len, 160);
+        to_peak(body, len, 0.35 * pkAll);
+        push_mono(sc, body, len, t0 + tMin - 0.001, close->pan, gB);
+        if (bo->type == BV_BOLT && PV(p, bvSizzle) > 0.01 && bo->has_tr) {
+            /* the bolt's own voice: a hot plasma ball hums, hisses and spits as it flies past, with Doppler */
+            voice_st st;
+            stereo_t mv;
+            st.r = r; st.ph = 0; st.lp = 0; st.ck = 0; st.hum = PV(p, bvTone); st.sizzle = PV(p, bvSizzle);
+            if (moving_source(ar, &bo->tr, PV(p, D), PV(p, miss), voice_gen, &st, &mv))
+                push_stereo(sc, mv.L, mv.R, mv.n, t0 + mv.t, gB);
+        }
+    }
+}
+
+static void plan_target(arena *ar, const be_params *q, const bolt_t *bo, double exitT, target_t *tg, int *has)
+{
+    double E, x, P;
+    int k, n;
+    const be_plate *pm;
+    *has = 0;
+    if (!strcmp(PS(q, tgMat), "none"))
+        return;
+    if (bo->type == BV_SLUG && !bo->reached)
+        return;
+    memset(tg, 0, sizeof *tg);
+    E = bo->type == BV_SLUG ? 0.5 * bo->mass * bo->vHit * bo->vHit : PV(q, tgEnergy);
+    n = bo->pulses ? bo->pulses : 1;
+    P = n;
+    x = maxd(0, PV(q, targetDist));
+    tg->hits = (thit_t *)ar_alloc(ar, n * sizeof(thit_t));
+    for (k = 0; k < n; k++) {
+        tg->hits[k].te = exitT + bo->flight + k * bo->period;
+        tg->hits[k].E = E / P;
+    }
+    tg->nh = n;
+    tg->mat = PS(q, tgMat);
+    tg->A = ablation_find(tg->mat);
+    tg->x = x;
+    tg->rT = maxd(0.5, js_hypot(PV(q, D) - x, PV(q, miss)));
+    tg->pan = clampd((x - PV(q, D)) / tg->rT, -1, 1) * 0.9;
+    tg->E = E;
+    /* a kinetic hit only flash-boils the surface at hypervelocity; a plain strike (no bolt) does not at all */
+    tg->abl = bo->type == BV_SLUG ? clampd(bo->vHit / 3000, 0.05, 1) : bo->type == BV_NONE ? 0 : 1;
+    pm = plate_find(tg->mat);
+    if (pm) {
+        plan_plate(ar, pm, PV(q, tgThick) / 1000, PV(q, tgSize), &tg->plate);
+        tg->has_plate = 1;
+    }
+    *has = 1;
+}
+
+/* one collapse of a 5 mm steam bubble (Rayleigh-Plesset, as the implosion model), reused at every size */
+static float *bubble_pulse(arena *ar, int *len_out)
+{
+    double rho = 1000, c = 1480, gam = 1.4, pInf = 1 * P0, pg0 = 0.05 * pInf, R0 = 0.005;
+    double tc = 0.915 * R0 * sqrt(rho / (pInf - pg0)), Tsim = mind(1.6, tc * 14 + 0.02);
+    int N = (int)ceil(Tsim * FS) + 2, n = 0, steps = 0, i, ip = 0, a0, e0, on;
+    double *Q = dnew(ar, N), R = R0, U = 0, t = 0, dtMax = 1 / (2 * FS), uMax = 2.5 * c, flo = 1e-5 * R0, damp = 0.6 / tc, pk = 0;
+    float *b, *out;
+#define BE_ACC(Rx, Ux, res) do { double pg_ = pg0 * pow(R0 / (Rx), 3 * gam); \
+        res = ((pg_ - pInf) / rho - 1.5 * (Ux) * (Ux) - 3 * gam * pg_ * (Ux) / (rho * c)) / (Rx); } while (0)
+    while (t < Tsim && steps < 1200000) {
+        double dt = mind(dtMax, 0.004 * R / (fabs(U) + 1e-6)), a1, Rm, Um, Rn, Un, tn, a2;
+        if (dt < 1e-10) dt = 1e-10;
+        BE_ACC(R, U, a1);
+        Rm = maxd(flo, R + U * dt / 2);
+        Um = U + a1 * dt / 2;
+        Rn = maxd(flo, R + Um * dt);
+        BE_ACC(Rm, Um, a2);
+        Un = clampd((U + a2 * dt) * (1 - damp * dt), -uMax, uMax);
+        tn = t + dt;
+        while (n < N && n / FS <= tn) {
+            double f = (n / FS - t) / dt, Ri = R + (Rn - R) * f, Ui = U + (Un - U) * f;
+            Q[n++] = Ri * Ri * Ui;
+        }
+        R = Rn; U = Un; t = tn; steps++;
+    }
+#undef BE_ACC
+    for (; n < N; n++)
+        Q[n] = R * R * U;
+    b = fnew(ar, N - 1);
+    for (i = 0; i < N - 1; i++) {
+        b[i] = (float)(rho * (Q[i + 1] - Q[i]) * FS);
+        if (fabs(b[i]) > pk) { pk = fabs(b[i]); ip = i; }
+    }
+    a0 = (int)maxd(0, ip - js_round(0.0015 * FS));
+    e0 = (int)mind(N - 1, ip + js_round(0.006 * FS));
+    on = e0 - a0;
+    out = fcopy(ar, b + a0, on);
+    for (i = 0; i < on; i++)
+        out[i] = (float)(out[i] * mind(mind(1, i / 16.0), (on - i) / 64.0));
+    to_peak(out, on, 1);
+    *len_out = on;
+    return out;
+}
+
+static void target_layers(scene_t *sc, target_t *tg, const be_params *p, double g3, double g4, double t0, rng_t *r)
+{
+    arena *ar = sc->ar;
+    double rT = tg->rT, Et = tg->E, tH, lvl;
+    const char *mat = tg->mat;
+    const thit_t *first = &tg->hits[0], *last = &tg->hits[tg->nh - 1];
+    const char *spatter = tg->A ? tg->A->spatter : 0;
+    int i, k, len;
+    float *buf;
+    tH = t0 + first->te + rT / C_AIR;
+    lvl = 10 * sqrt(maxd(Et, 0.01));   /* Pa at 1 m for the struck body: set against the bolt, not measured */
+    push_event(sc, BE_EVENT_IMPACT, tH);
+    if (g3 > 0) {
+        /* ablation: the energy that boils the surface off acts as a small blast, then the vapour jet hisses */
+        const be_ablation *A = tg->A;
+        float *abl[3];
+        int abn[3], na = 0;
+        for (k = 0; k < (tg->abl > 0 ? (tg->nh < 3 ? tg->nh : 3) : 0); k++) {
+            double Eh = tg->hits[k].E;
+            xblast_t b = blast_params(clampd(Eh * A->frac * tg->abl / 4.184e6, 1e-9, 100), rT);
+            int an = (int)ceil((b.td * 14 + 0.3) * FS) + 2400;
+            float *ab = fnew(ar, an);
+            shape_t s = { 0 };
+            s.A = b.peak; s.T = b.td; s.k = 1.2;
+            add_shape(ab, an, 0.0005, b.td * 9, &s);
+            noise_burst(ar, ab, an, 0.0008, 0.02 + 0.04 * log10(1 + Eh / 50), 1500, 12000, A->hiss * b.peak * 0.5 * tg->abl, r, 0.0005);
+            post_layer(ar, ab, an, rT, PV(p, ground) * 0.5);
+            abl[na] = ab;
+            abn[na] = an;
+            na++;
+        }
+        if (na)
+            for (k = 0; k < tg->nh; k++)
+                push_mono(sc, abl[k % na], abn[k % na], t0 + tg->hits[k].te + rT / C_AIR, tg->pan, g3);
+        if (tg->has_plate) {
+            /* the plate rings with bending waves; a pulsed beam strikes it again before it settles */
+            int n, P = tg->nh;
+            float *ir = bend_ir(ar, &tg->plate, !strcmp(mat, "wood") ? 3000 : 7000, r, &n);
+            to_peak(ir, n, lvl);
+            if (P > 1) {
+                int span = (int)js_round((last->te - first->te) * FS), cn = n + span + 8;
+                float *cv = fnew(ar, cn);
+                for (k = 0; k < P; k++) {
+                    double q = rnd(r);
+                    add_at(cv, cn, ir, n, tg->hits[k].te - first->te, (0.7 + 0.3 * q) / sqrt(P));
+                }
+                ir = cv;
+                n = cn;
+            }
+            put_at(sc, ir, n, tH, tg->pan, g3, rT);
+        } else if (!strcmp(mat, "concrete")) {
+            buf = modal_hit(ar, be_material_find("concrete"), Et * 0.2, clampd(pow(500 / maxd(Et, 1), 0.15), 0.3, 2), r, 0, 0, 0, &len);
+            to_peak(buf, len, 0.8 * lvl);
+            put_at(sc, buf, len, tH, tg->pan, g3, rT);
+        } else if (!strcmp(mat, "water")) {
+            int bpn, nb;
+            float *bp;
+            len = (int)ceil(2.5 * FS);
+            buf = fnew(ar, len);
+            noise_burst(ar, buf, len, 0, 0.18 + 0.1 * log10(1 + Et / 1000), 150, 3000, 0.6 * lvl, r, 0.002);   /* splash */
+            bp = bubble_pulse(ar, &bpn);
+            nb = (int)js_round(10 + 30 * log10(1 + Et / 100));
+            for (k = 0; k < nb; k++) {
+                /* steam bubbles collapse in the cold water around the hit: a crackle of sharp pulses */
+                double q1 = rnd(r), R = 0.0005 + 0.0035 * pow(q1, 1.5), q2, tt, q3;
+                int sn;
+                float *st = stretch(ar, bp, bpn, maxd(0.15, R / 0.005), &sn);
+                q2 = rnd(r);
+                tt = 0.01 + 0.25 * -log(1 - q2 * 0.97);
+                q3 = rnd(r);
+                add_at(buf, len, st, sn, tt, 0.12 * lvl * (R / 0.004) * (0.5 + q3));
+            }
+            put_at(sc, buf, len, tH, tg->pan, g3, rT);
+        }
+        if (spatter) {
+            /* molten droplets, shards or chips land around the hit */
+            int ns = (int)js_round(3 + 5 * log10(1 + Et / 100) * (!strcmp(mat, "glass") || !strcmp(mat, "concrete") ? 2 : 1));
+            int sn = (int)ceil(1.2 * FS);
+            float *sp = fnew(ar, sn);
+            const be_material *sm = be_material_find(spatter);
+            for (k = 0; k < ns; k++) {
+                double q1 = rnd(r), q2 = rnd(r), q3, q4;
+                int hn;
+                float *hb = modal_hit(ar, sm, 0.02 * (0.2 + q1), 2.5 + 3 * q2, r, 3, 0.35, 1, &hn);
+                q3 = rnd(r);
+                q4 = rnd(r);
+                add_at(sp, sn, hb, hn, 0.04 + 0.5 * pow(q3, 1.5), 0.5 + q4);
+            }
+            to_peak(sp, sn, 0.12 * lvl);
+            put_at(sc, sp, sn, tH, tg->pan, g3, rT);
+        }
+    }
+    if (g4 > 0 && PV(p, tgHeat) > 0.01) {
+        double heat = PV(p, tgHeat), t1 = t0 + last->te + rT / C_AIR, ts, lp = 0, ck = 0, nf;
+        int steam = !strcmp(mat, "ice") || !strcmp(mat, "water"), n;
+        float *sz;
+        /* sizzle: the hot spot boils and spits, then calms as it cools */
+        ts = (steam ? 0.8 : 0.3) + (steam ? 2.2 : 1.6) * heat;
+        n = (int)ceil((ts * 3 + 0.1) * FS);
+        sz = fnew(ar, n);
+        nf = n / 3.0;
+        for (i = 0; i < n; i++) {
+            double t = i / FS, w = rnd(r) * 2 - 1;
+            lp += (w - lp) * (steam ? 0.25 : 0.12);
+            ck *= 0.92;
+            if (rnd(r) < 0.002 * exp(-t / ts) * (steam ? 0.5 : 1.5))
+                ck += (rnd(r) - 0.3) * 6;
+            sz[i] = (float)(((w - lp) * (steam ? 1 : 0.5) + ck) * exp(-t / ts) * mind(mind(1, t / 0.02), (n - i) / nf));
+        }
+        to_peak(sz, n, lvl * 1.2 * heat * (steam ? 1.6 : 1));
+        put_at(sc, sz, n, t1 + 0.01, tg->pan, g4, rT);
+        if (strcmp(mat, "water")) {
+            /* ticks: the hot spot contracts and the body clicks. Ice cracks instead, and each crack sings */
+            int nt = (int)js_round(heat * (!strcmp(mat, "ice") ? 10 : 22)), tn;
+            double tau = 0.5 + 1.6 * heat;
+            float *tb;
+            const be_material *tm = be_material_find(spatter ? spatter : "steel");
+            tn = (int)ceil((tau * 3 + 1.4) * FS);
+            tb = fnew(ar, tn);
+            for (k = 0; k < nt; k++) {
+                double q = rnd(r), tt2 = 0.2 + tau * -log(1 - q * 0.95);
+                if (!strcmp(mat, "ice") && tg->has_plate) {
+                    int cn = (int)ceil(1.2 * FS);
+                    float *cr = fnew(ar, cn);
+                    double q1 = rnd(r), q2 = rnd(r), q3;
+                    bend_chirp(cr, cn, 0, 5 + 60 * q1, tg->plate.kap, 1, 9000, 40, 0.004, 6000, q2);
+                    q3 = rnd(r);
+                    to_peak(cr, cn, 0.3 + 0.7 * q3);
+                    add_at(tb, tn, cr, cn, tt2, 1);
+                } else {
+                    double q1 = rnd(r), q2 = rnd(r), q3;
+                    int kn;
+                    float *tk = modal_hit(ar, tm, 0.01 * (0.2 + q1), 2.5 + 3 * q2, r, 3, 0.35, 1, &kn);
+                    q3 = rnd(r);
+                    to_peak(tk, kn, 0.3 + 0.7 * q3);
+                    add_at(tb, tn, tk, kn, tt2, 1);
+                }
+            }
+            to_peak(tb, tn, lvl * (!strcmp(mat, "ice") ? 1.5 : 0.6) * heat);
+            put_at(sc, tb, tn, t1, tg->pan, g4, rT);
+        }
+        push_event(sc, BE_EVENT_PASS, t1 + 0.2);
+    }
+}
+
+static void plan_weapon(arena *ar, const be_params *q, rng_t *g, weapon_t *wp)
+{
+    const char *bv = PS(q, bvType);
+    double vExit = !strcmp(bv, "slug") || !strcmp(bv, "bolt") ? PV(q, bvSpeed) : 2000;
+    plan_launcher(ar, q, vExit, &wp->ln);
+    wp->exitT = wp->ln.tC + wp->ln.transit;
+    plan_bolt(ar, q, g, &wp->bo);
+    plan_target(ar, q, &wp->bo, wp->exitT, &wp->tg, &wp->has_tg);
+    wp->r0 = maxd(0.5, js_hypot(PV(q, D), PV(q, miss)));
+    wp->pan0 = -PV(q, D) / wp->r0 * 0.9;
+}
+
+static void weapon_layers(scene_t *sc, weapon_t *wp, const be_params *p, const gains_t *o, rng_t *r)
+{
+    launcher_layers(sc, &wp->ln, p, o->g1, o->t0, wp->r0, clampd(wp->pan0 + o->pan, -1, 1), r);
+    bolt_layers(sc, &wp->bo, p, o->g2, o->t0 + wp->exitT, r);
+    if (wp->has_tg)
+        target_layers(sc, &wp->tg, p, o->g3, o->g4, o->t0, r);
+}
+
+/* ------------------------------------------------------------------ projectile */
 static int launch_of(const char *s)
 {
     if (!strcmp(s, "blast")) return LAUNCH_BLAST;
@@ -1138,6 +2252,7 @@ typedef struct {
     int has_pay;
     xplan_t pay;
     xplan_t ex;
+    weapon_t wp;
 } plan_t;
 
 static void proj_layers(scene_t *sc, plan_t *pl, const be_params *p, const gains_t *o, rng_t *r)
@@ -1202,6 +2317,7 @@ static int kind_of(const char *k)
 {
     if (!strcmp(k, "projectile")) return 0;
     if (!strcmp(k, "explosion")) return 1;
+    if (!strcmp(k, "blaster")) return 2;
     return -1;
 }
 
@@ -1228,7 +2344,14 @@ static void plan_rep(arena *ar, const be_params *p, int seed, int k, plan_t *out
         double a = 1 + j * 0.7 * (rnd(&g) - 0.5);
         if (kind == 1)
             PV(&out->q, exDist) = PV(p, exDist) * a;
-        else
+        else if (kind == 2) {
+            double b2, b3;
+            PV(&out->q, miss) = PV(p, miss) * a;
+            b2 = rnd(&g);
+            PV(&out->q, bpStiff) = PV(p, bpStiff) * (1 + j * 0.3 * (b2 - 0.5));
+            b3 = rnd(&g);
+            PV(&out->q, bvSpeed) = PV(p, bvSpeed) * (1 + j * 0.1 * (b3 - 0.5));
+        } else
             PV(&out->q, miss) = PV(p, miss) * a;
         if (kind != 0)
             pan = j * 1.4 * (rnd(&g) - 0.5);
@@ -1238,6 +2361,8 @@ static void plan_rep(arena *ar, const be_params *p, int seed, int k, plan_t *out
     if (kind == 1)
         plan_explosion(ar, PV(&out->q, exW), PV(&out->q, exDist), (int)js_round(PV(&out->q, exFrags)),
                        (int)js_round(PV(&out->q, exDebris)), &g, &out->ex);
+    else if (kind == 2)
+        plan_weapon(ar, &out->q, &g, &out->wp);
     else {
         proj_from(&out->q, &out->pp);
         analyze_proj(ar, &out->pp, &out->an);
@@ -1289,7 +2414,9 @@ static void mix_scene(scene_t *sc, const be_params *p, int seed, mix_t *out)
             xo.pan = pl->pan; xo.ground = PV(&pl->q, ground);
             xo.gBlast = o.g1; xo.gRumble = o.g2; xo.gFrag = o.g3; xo.gDebris = o.g4; xo.grains = grains;
             explosion_layers(sc, &pl->ex, &xo, &r);
-        } else
+        } else if (pl->kind == 2)
+            weapon_layers(sc, &pl->wp, &pl->q, &o, &r);
+        else
             proj_layers(sc, pl, &pl->q, &o, &r);
         tOff += interval * (1 + PV(p, seqJitter) * (rnd(&trnd) - 0.5));
     }
@@ -1373,6 +2500,13 @@ static int check(const be_params *p)
             return BE_ERR_VALUE;
         if (!(PV(p, mass) > 0) || !(PV(p, cal) > 0) || !(PV(p, v0) > 0))
             return BE_ERR_VALUE;
+    } else if (kind_of(PS(p, kind)) == 2) {
+        if (launcher_of(PS(p, lnType)) < 0 || bolt_of(PS(p, bvType)) < 0)
+            return BE_ERR_VALUE;
+        if (strcmp(PS(p, tgMat), "none") && !ablation_find(PS(p, tgMat)))
+            return BE_ERR_VALUE;
+        if (launcher_of(PS(p, lnType)) == LN_LINE && strcmp(PS(p, bpBody), "none") && !body_find(PS(p, bpBody)))
+            return BE_ERR_VALUE;
     } else {
         if (!(PV(p, exW) > 0) || !(PV(p, exDist) > 0))
             return BE_ERR_VALUE;
@@ -1380,6 +2514,19 @@ static int check(const be_params *p)
             return BE_ERR_UNSUPPORTED;
     }
     return BE_OK;
+}
+
+int be_check(const be_params *p) { return p ? check(p) : BE_ERR_VALUE; }
+
+int be_preset_supported(int i)
+{
+    be_params p;
+    if (i < 0 || i >= be_preset_count())
+        return BE_ERR_PRESET;
+    be_params_reset(&p);
+    if (be_params_preset(&p, be_preset_id(i)))
+        return BE_ERR_PRESET;
+    return check(&p);
 }
 
 static void sort_events(be_event *e, int n)       /* stable, as Array.prototype.sort */

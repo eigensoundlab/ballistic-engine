@@ -62,6 +62,7 @@ namespace EigenSoundLab.Ballistic
         [DllImport(Lib)] internal static extern int be_finish(ref Sound s, byte[] preset, IntPtr[] keys, double[] values, int n);
         [DllImport(Lib)] internal static extern void be_sound_free(ref Sound s);
         [DllImport(Lib)] internal static extern int be_kind_supported(byte[] kind);
+        [DllImport(Lib)] internal static extern int be_preset_supported(int i);
         [DllImport(Lib)] internal static extern int be_preset_count();
         [DllImport(Lib)] internal static extern IntPtr be_preset_id(int i);
         [DllImport(Lib)] internal static extern IntPtr be_preset_name(int i);
@@ -149,15 +150,15 @@ namespace EigenSoundLab.Ballistic
     {
         public static string Version => Native.Text(Native.be_version());
 
-        /// <summary>Every preset of Ballistic: id, name, kind, and whether this version of the engine renders it.</summary>
+        /// <summary>Every preset of Ballistic: id, name, kind, and whether this version of the engine renders it (a kind not
+        /// ported yet, or a preset that needs a recording, does not).</summary>
         public static List<(string id, string name, string kind, bool renders)> Presets()
         {
             var list = new List<(string, string, string, bool)>();
             for (int i = 0; i < Native.be_preset_count(); i++)
             {
-                string kind = Native.Text(Native.be_preset_kind(i));
-                list.Add((Native.Text(Native.be_preset_id(i)), Native.Text(Native.be_preset_name(i)), kind,
-                          Native.be_kind_supported(Native.Z(kind)) != 0));
+                list.Add((Native.Text(Native.be_preset_id(i)), Native.Text(Native.be_preset_name(i)),
+                          Native.Text(Native.be_preset_kind(i)), Native.be_preset_supported(i) == 0));
             }
             return list;
         }

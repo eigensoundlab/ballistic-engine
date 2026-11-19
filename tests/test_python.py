@@ -53,8 +53,10 @@ class BindingTests(unittest.TestCase):
         self.assertTrue(listed["pistol"][3])
         self.assertEqual(listed["charge"][2], "explosion")
         self.assertFalse(listed["tesla"][3])
+        self.assertTrue(listed["railgun"][3])
+        self.assertFalse(listed["knockfire"][3])                 # needs a recording
         self.assertEqual(be.keys()["env"], "word")
-        self.assertEqual(be.load().version, "0.1.0")
+        self.assertEqual(be.load().version, "0.2.0")
 
 
 if __name__ == "__main__":

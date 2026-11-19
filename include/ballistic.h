@@ -78,6 +78,8 @@ BE_API const char *be_params_get_text(const be_params *p, const char *key);   /*
 /* Rendering. The physics, peak-normalised to 1, the silent tail cut. Thread-safe. */
 BE_API int be_render(const be_params *p, int seed, be_sound *out);
 BE_API int be_kind_supported(const char *kind);                 /* 1 if this version renders that kind */
+BE_API int be_check(const be_params *p);                        /* what be_render would answer, without rendering */
+BE_API int be_preset_supported(int i);                          /* BE_OK if this version renders preset i as it is */
 
 /* Ballistic's finishing for action, in place: an action preset ("game", "block", "slow", "far", "none" or NULL),
    then n named action parameters over it (punch, weight, drive, bite, tail, swell, width, loud, slowmo). */

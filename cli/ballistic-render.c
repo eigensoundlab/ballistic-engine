@@ -46,9 +46,11 @@ int main(int argc, char **argv)
         const char *a = argv[i], *v = i + 1 < argc ? argv[i + 1] : 0;
         if (!strcmp(a, "--list")) {
             int k;
-            for (k = 0; k < be_preset_count(); k++)
+            for (k = 0; k < be_preset_count(); k++) {
+                int st = be_preset_supported(k);
                 printf("%-14s %-12s %s%s\n", be_preset_id(k), be_preset_kind(k), be_preset_name(k),
-                       be_kind_supported(be_preset_kind(k)) ? "" : "   (not yet)");
+                       st == BE_OK ? "" : st == BE_ERR_KIND ? "   (not yet)" : "   (needs a recording)");
+            }
             return 0;
         } else if (!strcmp(a, "--keys")) {
             int k;

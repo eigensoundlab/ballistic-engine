@@ -18,8 +18,24 @@ const src = args.find((a) => !a.startsWith('--')) || path.join(ROOT, 'reference'
 const OUT = path.join(ROOT, 'src', 'tables.h');
 
 const ctx = {};
-vm.runInNewContext(fs.readFileSync(src, 'utf8'), ctx, { filename: src });
+const source = fs.readFileSync(src, 'utf8');
+vm.runInNewContext(source, ctx, { filename: src });
 const B = ctx.BFX;
+
+/* an object the engine keeps to itself (var NAME = { ... };), read from its source */
+function literal(name) {
+  const head = 'var ' + name + ' = ', at = source.indexOf(head);
+  if (at < 0) throw new Error('no ' + name + ' in ' + src);
+  let i = at + head.length, depth = 0, quote = null;
+  for (let j = i; j < source.length; j++) {
+    const c = source[j];
+    if (quote) { if (c === '\\') j++; else if (c === quote) quote = null; continue; }
+    if (c === "'" || c === '"') quote = c;
+    else if (c === '{' || c === '[') depth++;
+    else if (c === '}' || c === ']') { depth--; if (!depth) return vm.runInNewContext('(' + source.slice(i, j + 1) + ')'); }
+  }
+  throw new Error('unbalanced ' + name);
+}
 
 const cstr = (s) => JSON.stringify(String(s));
 const num = (v) => {
@@ -117,6 +133,31 @@ for (const [id, e] of envs) {
         .map((t) => `{ ${num(t.ms)}, ${num(t.g)}, ${num(t.pan)} }`).join(', ')} } },`);
 }
 out('};');
+/* ---- the blaster's bodies, plates, ablation; the sine table ---- */
+const BODIES = literal('BODIES'), ABL = literal('ABL'), SPATTER = literal('SPATTER');
+out(`#define BODY_COUNT ${Object.keys(BODIES).length}`);
+out('static const be_body BODIES[BODY_COUNT] = {');
+for (const [id, b] of Object.entries(BODIES)) out(`  { ${cstr(id)}, ${b.f.length}, { ${b.f.map(num).join(', ')} }, ${num(b.q)} },`);
+out('};');
+out(`#define PLATE_COUNT ${Object.keys(B.PLATES).length}`);
+out('static const be_plate PLATES[PLATE_COUNT] = {');
+for (const [id, m] of Object.entries(B.PLATES)) out(`  { ${cstr(id)}, ${num(m.E)}, ${num(m.rho)}, ${num(m.nu)}, ${num(m.eta)} },`);
+out('};');
+out(`#define ABLATION_COUNT ${Object.keys(ABL).length}`);
+out('static const be_ablation ABLATION[ABLATION_COUNT] = {');
+for (const [id, a] of Object.entries(ABL)) out(`  { ${cstr(id)}, ${num(a.frac)}, ${num(a.hiss)}, ${SPATTER[id] ? cstr(SPATTER[id]) : '0'} },`);
+out('};');
+out();
+const TAU = Math.PI * 2, sint = [];
+for (let i = 0; i < 8192; i++) {
+  let t = Math.fround(Math.sin(TAU * i / 8192)).toPrecision(9);
+  if (!t.includes('e')) t = t.replace(/0+$/, '').replace(/\.$/, '.0');
+  sint.push(t + 'f');
+}
+out('/* fsin: Math.sin(TAU * i / 8192) as a Float32Array holds it */');
+out('static const float SINT[8192] = {');
+for (let i = 0; i < 8192; i += 8) out('  ' + sint.slice(i, i + 8).join(', ') + ',');
+out('};');
 out();
 out('#endif');
 out();
@@ -128,5 +169,5 @@ if (check) {
   console.log('src/tables.h is up to date');
 } else {
   fs.writeFileSync(OUT, text);
-  console.log(`wrote src/tables.h: ${keys.length} parameters, ${B.PRESETS.length} presets, ${mats.length} materials, ${envs.length} rooms`);
+  console.log(`wrote src/tables.h: ${keys.length} parameters, ${B.PRESETS.length} presets, ${mats.length} materials, ${envs.length} rooms, blaster tables`);
 }

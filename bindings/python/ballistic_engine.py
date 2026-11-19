@@ -77,7 +77,8 @@ class Engine:
             "be_params_new": (P, []), "be_params_free": (None, [P]), "be_params_preset": (I, [P, C]),
             "be_params_set": (I, [P, C, D]), "be_params_set_text": (I, [P, C, C]),
             "be_params_get": (I, [P, C, ctypes.POINTER(D)]), "be_params_get_text": (C, [P, C]),
-            "be_render": (I, [P, I, S]), "be_kind_supported": (I, [C]),
+            "be_render": (I, [P, I, S]), "be_kind_supported": (I, [C]), "be_check": (I, [P]),
+            "be_preset_supported": (I, [I]),
             "be_finish": (I, [S, C, ctypes.POINTER(C), ctypes.POINTER(D), I]),
             "be_cut": (None, [S, D, D]), "be_set_peak": (None, [S, D]), "be_write_wav": (I, [S, C, I]),
             "be_sound_free": (None, [S]), "be_preset_count": (I, []), "be_preset_id": (C, [I]),
@@ -105,12 +106,12 @@ class Engine:
         return self.lib.be_reference().decode()
 
     def presets(self):
-        """``[(id, name, kind, renders), ...]``: every preset of Ballistic, and whether this version renders it."""
+        """``[(id, name, kind, renders), ...]``: every preset of Ballistic, and whether this version renders it (a kind
+        not ported yet, or a preset that needs a recording, does not)."""
         out = []
         for i in range(self.lib.be_preset_count()):
-            kind = self.lib.be_preset_kind(i)
-            out.append((self.lib.be_preset_id(i).decode(), self.lib.be_preset_name(i).decode(), kind.decode(),
-                        bool(self.lib.be_kind_supported(kind))))
+            out.append((self.lib.be_preset_id(i).decode(), self.lib.be_preset_name(i).decode(),
+                        self.lib.be_preset_kind(i).decode(), self.lib.be_preset_supported(i) == 0))
         return out
 
     def actions(self):

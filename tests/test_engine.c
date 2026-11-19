@@ -44,8 +44,9 @@ static void every_preset(void)
         int st;
         CHECK(be_params_preset(p, be_preset_id(i)) == BE_OK, "preset %s", be_preset_id(i));
         st = be_render(p, 3, &s);
-        if (!be_kind_supported(be_preset_kind(i))) {
-            CHECK(st == BE_ERR_KIND || st == BE_ERR_UNSUPPORTED, "%s: a kind not ported yet says so (%d)", be_preset_id(i), st);
+        if (be_preset_supported(i) != BE_OK) {
+            CHECK(st == be_preset_supported(i) && (st == BE_ERR_KIND || st == BE_ERR_UNSUPPORTED),
+                  "%s: a kind not ported yet, or a recording, says so (%d)", be_preset_id(i), st);
             later++;
             continue;
         }
@@ -66,7 +67,7 @@ static void every_preset(void)
               "%s: game finishing, peak %g", be_preset_id(i), peak(&s));
         be_sound_free(&s);
     }
-    CHECK(rendered >= 16, "%d presets rendered", rendered);
+    CHECK(rendered >= 32, "%d presets rendered", rendered);
     printf("%d presets render, %d wait for later versions\n", rendered, later);
     be_params_free(p);
 }
@@ -114,7 +115,22 @@ static void params(void)
     be_params_set_text(q, "env", "nowhere");
     CHECK(be_render(q, 1, &s) == BE_OK, "an unknown room is no room, as in Ballistic");
     be_sound_free(&s);
-    CHECK(be_kind_supported("projectile") && be_kind_supported("explosion") && !be_kind_supported("rotor"), "kinds");
+    CHECK(be_kind_supported("projectile") && be_kind_supported("explosion") && be_kind_supported("blaster") &&
+          !be_kind_supported("rotor"), "kinds");
+    be_params_preset(q, "railgun");
+    CHECK(be_check(q) == BE_OK, "a rail gun checks");
+    be_params_set_text(q, "lnType", "catapult");
+    CHECK(be_check(q) == BE_ERR_VALUE, "an unknown launcher");
+    be_params_preset(q, "laser");
+    be_params_set_text(q, "tgMat", "cheese");
+    CHECK(be_check(q) == BE_ERR_VALUE, "an unknown target");
+    {
+        int k;
+        for (k = 0; k < be_preset_count() && strcmp(be_preset_id(k), "knockfire"); k++)
+            ;
+        CHECK(be_preset_supported(k) == BE_ERR_UNSUPPORTED, "knockfire needs a recording");
+        CHECK(be_preset_supported(-1) == BE_ERR_PRESET, "no preset -1");
+    }
     CHECK(strlen(be_status_text(BE_ERR_KIND)) > 10 && be_version()[0] == '0', "words for statuses, a version");
     be_params_free(p);
     be_params_free(q);
