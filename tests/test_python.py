@@ -58,7 +58,7 @@ class BindingTests(unittest.TestCase):
         self.assertTrue(listed["railgun"][3])
         self.assertFalse(listed["knockfire"][3])                 # needs a recording
         self.assertEqual(be.keys()["env"], "word")
-        self.assertEqual(be.load().version, "0.4.0")
+        self.assertEqual(be.load().version, "0.5.0")
 
     def test_loops_stay_loops(self):
         s = be.render("shield", seed=2, action="game")

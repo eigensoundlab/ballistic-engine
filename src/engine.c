@@ -4395,7 +4395,8 @@ static float *stretch(arena *ar, const float *x, int M, double s, int *n_out)
 
 typedef struct { int n; double level; } onset_t;
 
-static int find_onsets(const float *L, const float *R, int N, onset_t *out5)
+/* onsets from sample 'from' on; the samples before it only warm the detector */
+static int find_onsets(const float *L, const float *R, int N, int from, onset_t *out5)
 {
     double pk = peak_of(L, R, N), fast = 0, slow = 0, aF = exp(-1 / (0.012 * FS)), aSa = exp(-1 / (0.03 * FS));
     double aSr = exp(-1 / (0.25 * FS));
@@ -4408,7 +4409,7 @@ static int find_onsets(const float *L, const float *R, int N, onset_t *out5)
         double x = maxd(fabs(L[n]), fabs(R[n]));
         fast = x > fast ? x : x + (fast - x) * aF;
         slow = x > slow ? x + (slow - x) * aSa : x + (slow - x) * aSr;
-        if (fast > 0.2 * pk && fast > 2.5 * slow && n - last > 0.14 * FS) {
+        if (n >= from && fast > 0.2 * pk && fast > 2.5 * slow && n - last > 0.14 * FS) {
             double lv = 0;
             for (j = n; j < n + win && j < N; j++)
                 lv = maxd(lv, maxd(fabs(L[j]), fabs(R[j])));
@@ -4513,7 +4514,7 @@ static int finish(be_sound *s, const char *preset, const char *const *keys, cons
     float *L, *R;
     int N, n, i, j, non, a0;
     volatile int pad = 0;
-    onset_t on[5];
+    onset_t on[15];
     if (!s || !s->L)
         return BE_ERR_VALUE;
     memcpy(a, ACTION_DEFAULTS, sizeof a);
@@ -4566,7 +4567,20 @@ static int finish(be_sound *s, const char *preset, const char *const *keys, cons
         R = nr;
         N += extra;
     }
-    non = find_onsets(L, R, N, on);
+    if (loop) {
+        /* a loop's onsets come from the kept period, heard after one period of warm-up, and repeat in every
+           period, so a sub drop near the end wraps round the seam */
+        onset_t o5[5];
+        int Pl = (int)js_round(s->n * slow), k, m = find_onsets(L, R, 2 * Pl, Pl, o5);
+        non = 0;
+        for (i = 0; i < m; i++)
+            for (k = 0; k < 3; k++) {
+                on[non].n = o5[i].n - Pl + k * Pl;
+                on[non].level = o5[i].level;
+                non++;
+            }
+    } else
+        non = find_onsets(L, R, N, 0, on);
     if (a[A_punch] > 0)
         transient(L, R, N, a[A_punch]);
     if (a[A_weight] > 0) {

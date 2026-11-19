@@ -8,7 +8,8 @@ is checked against it on every change.
 - **C99, no dependencies** beyond the C library and libm. One header, two source files.
 - **Thread-safe**, no global state: render a pool of takes on worker threads while a level loads.
 - **5 to 18 times faster** than the JavaScript engine on V8 (below).
-- **73 of Ballistic's 83 presets**: every kind of sound Ballistic models; the other 10 need a recording.
+- **73 of Ballistic's 173 presets**: every weapon, blast and energy kind Ballistic models (10 more need a recording);
+  the game sounds Ballistic added in 3603078 (liquids, mechanisms, heat, fire, footsteps, voices, handling) are next.
 - **Bindings**: Python (ctypes, `bindings/python`), C# for Unity and .NET (`bindings/csharp`).
 - **Apache-2.0**, as Ballistic.
 
@@ -147,7 +148,7 @@ include/ballistic.h     the API
 src/engine.c            the DSP, a port of reference/engine.js
 src/params.c            parameters by name, presets, lists
 src/tables.h            generated from reference/engine.js: parameters, presets, materials, rooms
-reference/engine.js     Ballistic's engine, the reference (version 0.1.0, 45a3f91)
+reference/engine.js     Ballistic's engine, the reference (version 0.1.0, 3603078)
 tools/gen_tables.mjs    writes src/tables.h
 cli/ballistic-render.c  the command-line renderer
 bindings/               Python, C#

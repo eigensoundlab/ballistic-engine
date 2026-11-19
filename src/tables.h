@@ -135,6 +135,70 @@ enum {
   K_ffChorus,
   K_ffSurface,
   K_ffSoliton,
+  K_lqMode,
+  K_lqMedium,
+  K_lqDrop,
+  K_lqHeight,
+  K_lqDepth,
+  K_lqMass,
+  K_lqFlow,
+  K_lqVessel,
+  K_lqFill,
+  K_lqTemp,
+  K_lqThick,
+  K_lqRate,
+  K_lqSize,
+  K_lqHeat,
+  K_lqRain,
+  K_lqDist,
+  K_mcType,
+  K_mcDrive,
+  K_mcAction,
+  K_mcMass,
+  K_mcMat,
+  K_mcStroke,
+  K_mcAngle,
+  K_mcTime,
+  K_mcStop,
+  K_mcLatch,
+  K_mcWear,
+  K_mcRpm,
+  K_mcDist,
+  K_thMode,
+  K_thMat,
+  K_thMass,
+  K_thDT,
+  K_thTime,
+  K_thJoints,
+  K_thStrength,
+  K_thDist,
+  K_ftMass,
+  K_ftLegs,
+  K_ftFoot,
+  K_ftSurface,
+  K_ftGait,
+  K_ftSteps,
+  K_ftGear,
+  K_ftDist,
+  K_crType,
+  K_crCall,
+  K_crMass,
+  K_crPitch,
+  K_crTract,
+  K_crEffort,
+  K_crRough,
+  K_crLength,
+  K_crDist,
+  K_hdObject,
+  K_hdAction,
+  K_hdHeight,
+  K_hdSurface,
+  K_hdDist,
+  K_fiMode,
+  K_fiSize,
+  K_fiMoist,
+  K_fiWind,
+  K_fiDist,
   K_seqCount,
   K_seqInterval,
   K_seqJitter,
@@ -288,6 +352,70 @@ static const be_key KEYS[K_COUNT] = {
   { "ffChorus", BE_NUMBER, 0.4, 0 },
   { "ffSurface", BE_NUMBER, 0.4, 0 },
   { "ffSoliton", BE_NUMBER, 0.4, 0 },
+  { "lqMode", BE_TEXT, 0.0, "drop" },
+  { "lqMedium", BE_TEXT, 0.0, "water" },
+  { "lqDrop", BE_NUMBER, 0.0023, 0 },
+  { "lqHeight", BE_NUMBER, 0.07, 0 },
+  { "lqDepth", BE_NUMBER, 0.2, 0 },
+  { "lqMass", BE_NUMBER, 0.2, 0 },
+  { "lqFlow", BE_NUMBER, 0.08, 0 },
+  { "lqVessel", BE_NUMBER, 0.12, 0 },
+  { "lqFill", BE_NUMBER, 0.9, 0 },
+  { "lqTemp", BE_NUMBER, 650.0, 0 },
+  { "lqThick", BE_NUMBER, 0.002, 0 },
+  { "lqRate", BE_NUMBER, 300.0, 0 },
+  { "lqSize", BE_NUMBER, 1.0, 0 },
+  { "lqHeat", BE_NUMBER, 1.0, 0 },
+  { "lqRain", BE_NUMBER, 8.0, 0 },
+  { "lqDist", BE_NUMBER, 1.5, 0 },
+  { "mcType", BE_TEXT, 0.0, "slide" },
+  { "mcDrive", BE_TEXT, 0.0, "hydraulic" },
+  { "mcAction", BE_TEXT, 0.0, "close" },
+  { "mcMass", BE_NUMBER, 300.0, 0 },
+  { "mcMat", BE_TEXT, 0.0, "steel" },
+  { "mcStroke", BE_NUMBER, 1.6, 0 },
+  { "mcAngle", BE_NUMBER, 90.0, 0 },
+  { "mcTime", BE_NUMBER, 1.8, 0 },
+  { "mcStop", BE_TEXT, 0.0, "rubber" },
+  { "mcLatch", BE_TEXT, 0.0, "bolt" },
+  { "mcWear", BE_NUMBER, 0.1, 0 },
+  { "mcRpm", BE_NUMBER, 3000.0, 0 },
+  { "mcDist", BE_NUMBER, 3.0, 0 },
+  { "thMode", BE_TEXT, 0.0, "cool" },
+  { "thMat", BE_TEXT, 0.0, "steel" },
+  { "thMass", BE_NUMBER, 8.0, 0 },
+  { "thDT", BE_NUMBER, 400.0, 0 },
+  { "thTime", BE_NUMBER, 8.0, 0 },
+  { "thJoints", BE_NUMBER, 6.0, 0 },
+  { "thStrength", BE_NUMBER, 0.6, 0 },
+  { "thDist", BE_NUMBER, 1.5, 0 },
+  { "ftMass", BE_NUMBER, 75.0, 0 },
+  { "ftLegs", BE_TEXT, 0.0, "2" },
+  { "ftFoot", BE_TEXT, 0.0, "boot" },
+  { "ftSurface", BE_TEXT, 0.0, "concrete" },
+  { "ftGait", BE_TEXT, 0.0, "walk" },
+  { "ftSteps", BE_NUMBER, 6.0, 0 },
+  { "ftGear", BE_NUMBER, 0.0, 0 },
+  { "ftDist", BE_NUMBER, 2.0, 0 },
+  { "crType", BE_TEXT, 0.0, "beast" },
+  { "crCall", BE_TEXT, 0.0, "attack" },
+  { "crMass", BE_NUMBER, 190.0, 0 },
+  { "crPitch", BE_NUMBER, 1.0, 0 },
+  { "crTract", BE_NUMBER, 1.0, 0 },
+  { "crEffort", BE_NUMBER, 1.0, 0 },
+  { "crRough", BE_NUMBER, 1.0, 0 },
+  { "crLength", BE_NUMBER, 1.0, 0 },
+  { "crDist", BE_NUMBER, 5.0, 0 },
+  { "hdObject", BE_TEXT, 0.0, "coins" },
+  { "hdAction", BE_TEXT, 0.0, "drop" },
+  { "hdHeight", BE_NUMBER, 0.3, 0 },
+  { "hdSurface", BE_TEXT, 0.0, "wood" },
+  { "hdDist", BE_NUMBER, 0.8, 0 },
+  { "fiMode", BE_TEXT, 0.0, "campfire" },
+  { "fiSize", BE_NUMBER, 0.6, 0 },
+  { "fiMoist", BE_NUMBER, 0.3, 0 },
+  { "fiWind", BE_NUMBER, 0.2, 0 },
+  { "fiDist", BE_NUMBER, 2.0, 0 },
   { "seqCount", BE_NUMBER, 1.0, 0 },
   { "seqInterval", BE_NUMBER, 0.12, 0 },
   { "seqJitter", BE_NUMBER, 0.2, 0 },
@@ -391,8 +519,98 @@ static const be_kv PRESET_79[] = { { K_kind, 0.0, "recording" }, { K_rcAsset, 0.
 static const be_kv PRESET_80[] = { { K_kind, 0.0, "recording" }, { K_rcAsset, 0.0, "ex:rain" }, { K_rcBody, 0.0, "ice" }, { K_rcThick, 40.0, 0 }, { K_rcSize, 40.0, 0 }, { K_rcDist, 6.0, 0 }, { K_env, 0.0, "valley" }, { K_trimCrack, -18.0, 0 } };
 static const be_kv PRESET_81[] = { { K_kind, 0.0, "recording" }, { K_rcAsset, 0.0, "ex:voice" }, { K_rcBody, 0.0, "line" }, { K_rcLength, 25.0, 0 }, { K_rcDist, 2.0, 0 }, { K_env, 0.0, "indoor" }, { K_trimCrack, -40.0, 0 } };
 static const be_kv PRESET_82[] = { { K_kind, 0.0, "recording" }, { K_rcAsset, 0.0, "ex:voice" }, { K_rcBody, 0.0, "spring" }, { K_rcLength, 0.6, 0 }, { K_rcDist, 2.0, 0 }, { K_env, 0.0, "none" }, { K_trimCrack, -10.0, 0 } };
+static const be_kv PRESET_83[] = { { K_kind, 0.0, "liquid" }, { K_lqMode, 0.0, "drop" }, { K_env, 0.0, "room" } };
+static const be_kv PRESET_84[] = { { K_kind, 0.0, "liquid" }, { K_lqMode, 0.0, "drop" }, { K_lqDrop, 0.0026, 0 }, { K_lqHeight, 0.06, 0 }, { K_lqDepth, 0.5, 0 }, { K_lqDist, 4.0, 0 }, { K_env, 0.0, "cave" } };
+static const be_kv PRESET_85[] = { { K_kind, 0.0, "liquid" }, { K_lqMode, 0.0, "drop" }, { K_lqDrop, 0.0025, 0 }, { K_lqHeight, 1.5, 0 }, { K_lqDepth, 0.001, 0 }, { K_lqDist, 1.2, 0 }, { K_env, 0.0, "room" } };
+static const be_kv PRESET_86[] = { { K_kind, 0.0, "liquid" }, { K_lqMode, 0.0, "splash" }, { K_lqMass, 0.25, 0 }, { K_lqHeight, 1.5, 0 }, { K_lqDepth, 1.0, 0 }, { K_lqDist, 3.0, 0 }, { K_env, 0.0, "forest" } };
+static const be_kv PRESET_87[] = { { K_kind, 0.0, "liquid" }, { K_lqMode, 0.0, "splash" }, { K_lqMass, 80.0, 0 }, { K_lqHeight, 1.5, 0 }, { K_lqDepth, 3.0, 0 }, { K_lqDist, 6.0, 0 }, { K_env, 0.0, "field" } };
+static const be_kv PRESET_88[] = { { K_kind, 0.0, "liquid" }, { K_lqMode, 0.0, "splash" }, { K_lqMedium, 0.0, "mud" }, { K_lqMass, 2.0, 0 }, { K_lqHeight, 0.25, 0 }, { K_lqDepth, 0.05, 0 }, { K_lqDist, 1.5, 0 }, { K_env, 0.0, "field" } };
+static const be_kv PRESET_89[] = { { K_kind, 0.0, "liquid" }, { K_lqMode, 0.0, "pour" }, { K_lqHeight, 0.15, 0 }, { K_lqDist, 0.8, 0 }, { K_env, 0.0, "room" } };
+static const be_kv PRESET_90[] = { { K_kind, 0.0, "liquid" }, { K_lqMode, 0.0, "pour" }, { K_lqFlow, 0.25, 0 }, { K_lqHeight, 0.6, 0 }, { K_lqVessel, 0.3, 0 }, { K_lqFill, 0.6, 0 }, { K_lqDist, 1.5, 0 }, { K_env, 0.0, "room" } };
+static const be_kv PRESET_91[] = { { K_kind, 0.0, "liquid" }, { K_lqMode, 0.0, "quench" }, { K_lqMass, 0.1, 0 }, { K_lqThick, 0.0015, 0 }, { K_lqTemp, 600.0, 0 }, { K_lqDist, 1.2, 0 }, { K_env, 0.0, "room" } };
+static const be_kv PRESET_92[] = { { K_kind, 0.0, "liquid" }, { K_lqMode, 0.0, "stream" }, { K_lqRate, 300.0, 0 }, { K_lqDist, 3.0, 0 }, { K_env, 0.0, "forest" } };
+static const be_kv PRESET_93[] = { { K_kind, 0.0, "liquid" }, { K_lqMode, 0.0, "rain" }, { K_lqRain, 8.0, 0 }, { K_lqDist, 2.0, 0 }, { K_env, 0.0, "forest" } };
+static const be_kv PRESET_94[] = { { K_kind, 0.0, "liquid" }, { K_lqMode, 0.0, "rain" }, { K_lqRain, 1.0, 0 }, { K_lqDist, 1.5, 0 }, { K_env, 0.0, "forest" } };
+static const be_kv PRESET_95[] = { { K_kind, 0.0, "liquid" }, { K_lqMode, 0.0, "bubble" }, { K_lqRate, 120.0, 0 }, { K_lqHeat, 0.6, 0 }, { K_lqDist, 1.0, 0 }, { K_env, 0.0, "room" } };
+static const be_kv PRESET_96[] = { { K_kind, 0.0, "liquid" }, { K_lqMode, 0.0, "bubble" }, { K_lqRate, 120.0, 0 }, { K_lqHeat, 1.0, 0 }, { K_lqDist, 1.0, 0 }, { K_env, 0.0, "room" } };
+static const be_kv PRESET_97[] = { { K_kind, 0.0, "liquid" }, { K_lqMode, 0.0, "bubble" }, { K_lqMedium, 0.0, "mud" }, { K_lqRate, 6.0, 0 }, { K_lqDist, 3.0, 0 }, { K_env, 0.0, "field" } };
+static const be_kv PRESET_98[] = { { K_kind, 0.0, "liquid" }, { K_lqMode, 0.0, "bubble" }, { K_lqMedium, 0.0, "lava" }, { K_lqRate, 2.0, 0 }, { K_lqDist, 6.0, 0 }, { K_env, 0.0, "cave" } };
+static const be_kv PRESET_99[] = { { K_kind, 0.0, "liquid" }, { K_lqMode, 0.0, "bubble" }, { K_lqMedium, 0.0, "acid" }, { K_lqRate, 2500.0, 0 }, { K_lqDist, 1.5, 0 }, { K_env, 0.0, "room" } };
+static const be_kv PRESET_100[] = { { K_kind, 0.0, "mechanism" }, { K_env, 0.0, "indoor" } };
+static const be_kv PRESET_101[] = { { K_kind, 0.0, "mechanism" }, { K_mcAction, 0.0, "open" }, { K_env, 0.0, "indoor" } };
+static const be_kv PRESET_102[] = { { K_kind, 0.0, "mechanism" }, { K_mcDrive, 0.0, "pneumatic" }, { K_mcAction, 0.0, "open" }, { K_mcMass, 60.0, 0 }, { K_mcMat, 0.0, "aluminium" }, { K_mcStroke, 1.2, 0 }, { K_mcTime, 0.6, 0 }, { K_mcLatch, 0.0, "none" }, { K_env, 0.0, "indoor" } };
+static const be_kv PRESET_103[] = { { K_kind, 0.0, "mechanism" }, { K_mcDrive, 0.0, "electric" }, { K_mcMass, 2500.0, 0 }, { K_mcStroke, 2.5, 0 }, { K_mcTime, 6.0, 0 }, { K_mcStop, 0.0, "damped" }, { K_mcRpm, 1500.0, 0 }, { K_mcWear, 0.3, 0 }, { K_mcDist, 5.0, 0 }, { K_env, 0.0, "indoor" } };
+static const be_kv PRESET_104[] = { { K_kind, 0.0, "mechanism" }, { K_mcDrive, 0.0, "electric" }, { K_mcAction, 0.0, "open" }, { K_mcMass, 80.0, 0 }, { K_mcStroke, 2.5, 0 }, { K_mcTime, 4.0, 0 }, { K_mcStop, 0.0, "hard" }, { K_mcLatch, 0.0, "none" }, { K_mcRpm, 1400.0, 0 }, { K_mcWear, 0.7, 0 }, { K_env, 0.0, "urban" } };
+static const be_kv PRESET_105[] = { { K_kind, 0.0, "mechanism" }, { K_mcType, 0.0, "hinge" }, { K_mcDrive, 0.0, "manual" }, { K_mcAction, 0.0, "open" }, { K_mcMass, 25.0, 0 }, { K_mcMat, 0.0, "wood" }, { K_mcTime, 2.2, 0 }, { K_mcStop, 0.0, "hard" }, { K_mcLatch, 0.0, "latch" }, { K_mcWear, 0.8, 0 }, { K_mcDist, 2.0, 0 }, { K_env, 0.0, "room" } };
+static const be_kv PRESET_106[] = { { K_kind, 0.0, "mechanism" }, { K_mcType, 0.0, "hinge" }, { K_mcDrive, 0.0, "manual" }, { K_mcMass, 30.0, 0 }, { K_mcMat, 0.0, "wood" }, { K_mcAngle, 70.0, 0 }, { K_mcTime, 0.45, 0 }, { K_mcStop, 0.0, "hard" }, { K_mcLatch, 0.0, "latch" }, { K_mcWear, 0.1, 0 }, { K_mcDist, 2.0, 0 }, { K_env, 0.0, "room" } };
+static const be_kv PRESET_107[] = { { K_kind, 0.0, "mechanism" }, { K_mcType, 0.0, "hinge" }, { K_mcDrive, 0.0, "manual" }, { K_mcMass, 6.0, 0 }, { K_mcTime, 0.35, 0 }, { K_mcStop, 0.0, "hard" }, { K_mcLatch, 0.0, "latch" }, { K_mcWear, 0.4, 0 }, { K_mcDist, 1.5, 0 }, { K_env, 0.0, "room" } };
+static const be_kv PRESET_108[] = { { K_kind, 0.0, "mechanism" }, { K_mcType, 0.0, "hinge" }, { K_mcDrive, 0.0, "manual" }, { K_mcAction, 0.0, "open" }, { K_mcMass, 4.0, 0 }, { K_mcMat, 0.0, "wood" }, { K_mcAngle, 100.0, 0 }, { K_mcTime, 0.9, 0 }, { K_mcStop, 0.0, "hard" }, { K_mcLatch, 0.0, "none" }, { K_mcWear, 0.5, 0 }, { K_mcDist, 1.2, 0 }, { K_env, 0.0, "room" } };
+static const be_kv PRESET_109[] = { { K_kind, 0.0, "mechanism" }, { K_mcType, 0.0, "hinge" }, { K_mcDrive, 0.0, "manual" }, { K_mcMass, 4.0, 0 }, { K_mcMat, 0.0, "wood" }, { K_mcAngle, 100.0, 0 }, { K_mcTime, 0.35, 0 }, { K_mcStop, 0.0, "hard" }, { K_mcLatch, 0.0, "none" }, { K_mcDist, 1.2, 0 }, { K_env, 0.0, "room" } };
+static const be_kv PRESET_110[] = { { K_kind, 0.0, "mechanism" }, { K_mcType, 0.0, "rotate" }, { K_mcDrive, 0.0, "electric" }, { K_mcAction, 0.0, "open" }, { K_mcMass, 400.0, 0 }, { K_mcTime, 2.5, 0 }, { K_mcStop, 0.0, "damped" }, { K_mcLatch, 0.0, "none" }, { K_mcWear, 0.2, 0 }, { K_mcDist, 4.0, 0 }, { K_env, 0.0, "field" } };
+static const be_kv PRESET_111[] = { { K_kind, 0.0, "mechanism" }, { K_mcType, 0.0, "rotate" }, { K_mcDrive, 0.0, "electric" }, { K_mcAction, 0.0, "open" }, { K_mcMass, 0.5, 0 }, { K_mcMat, 0.0, "plastic" }, { K_mcAngle, 60.0, 0 }, { K_mcTime, 0.35, 0 }, { K_mcStop, 0.0, "hard" }, { K_mcLatch, 0.0, "none" }, { K_mcWear, 0.05, 0 }, { K_mcRpm, 12000.0, 0 }, { K_mcDist, 1.0, 0 }, { K_env, 0.0, "room" } };
+static const be_kv PRESET_112[] = { { K_kind, 0.0, "mechanism" }, { K_mcType, 0.0, "switch" }, { K_mcDrive, 0.0, "manual" }, { K_mcMass, 0.02, 0 }, { K_mcMat, 0.0, "plastic" }, { K_mcTime, 0.012, 0 }, { K_mcLatch, 0.0, "none" }, { K_mcDist, 0.6, 0 }, { K_env, 0.0, "room" } };
+static const be_kv PRESET_113[] = { { K_kind, 0.0, "mechanism" }, { K_mcType, 0.0, "switch" }, { K_mcDrive, 0.0, "manual" }, { K_mcMass, 1.5, 0 }, { K_mcTime, 0.08, 0 }, { K_mcLatch, 0.0, "none" }, { K_mcWear, 0.3, 0 }, { K_mcDist, 1.0, 0 }, { K_env, 0.0, "indoor" } };
+static const be_kv PRESET_114[] = { { K_kind, 0.0, "heat" }, { K_thTime, 10.0, 0 }, { K_thJoints, 6.0, 0 }, { K_env, 0.0, "room" } };
+static const be_kv PRESET_115[] = { { K_kind, 0.0, "heat" }, { K_thMass, 3.0, 0 }, { K_thDT, 500.0, 0 }, { K_thTime, 6.0, 0 }, { K_thJoints, 5.0, 0 }, { K_thDist, 1.0, 0 }, { K_env, 0.0, "urban" } };
+static const be_kv PRESET_116[] = { { K_kind, 0.0, "heat" }, { K_thMode, 0.0, "heat" }, { K_thMass, 6.0, 0 }, { K_thDT, 200.0, 0 }, { K_thTime, 6.0, 0 }, { K_thJoints, 5.0, 0 }, { K_env, 0.0, "room" } };
+static const be_kv PRESET_117[] = { { K_kind, 0.0, "heat" }, { K_thMode, 0.0, "heat" }, { K_thMass, 40.0, 0 }, { K_thDT, 40.0, 0 }, { K_thTime, 10.0, 0 }, { K_thJoints, 8.0, 0 }, { K_thDist, 4.0, 0 }, { K_env, 0.0, "field" } };
+static const be_kv PRESET_118[] = { { K_kind, 0.0, "heat" }, { K_thMat, 0.0, "wood" }, { K_thMass, 200.0, 0 }, { K_thDT, 12.0, 0 }, { K_thTime, 12.0, 0 }, { K_thJoints, 4.0, 0 }, { K_thDist, 3.0, 0 }, { K_env, 0.0, "room" } };
+static const be_kv PRESET_119[] = { { K_kind, 0.0, "heat" }, { K_thMode, 0.0, "acid" }, { K_thMass, 3.0, 0 }, { K_thTime, 4.0, 0 }, { K_env, 0.0, "room" } };
+static const be_kv PRESET_120[] = { { K_kind, 0.0, "heat" }, { K_thMode, 0.0, "acid" }, { K_thMat, 0.0, "wood" }, { K_thMass, 5.0, 0 }, { K_thTime, 3.0, 0 }, { K_env, 0.0, "room" } };
+static const be_kv PRESET_121[] = { { K_kind, 0.0, "heat" }, { K_thMode, 0.0, "lava" }, { K_thMat, 0.0, "wood" }, { K_thMass, 6.0, 0 }, { K_thTime, 3.0, 0 }, { K_thDist, 3.0, 0 }, { K_env, 0.0, "cave" } };
+static const be_kv PRESET_122[] = { { K_kind, 0.0, "heat" }, { K_thMode, 0.0, "lava" }, { K_thMass, 10.0, 0 }, { K_thTime, 4.0, 0 }, { K_thDist, 3.0, 0 }, { K_env, 0.0, "cave" } };
+static const be_kv PRESET_123[] = { { K_kind, 0.0, "heat" }, { K_thMode, 0.0, "torch" }, { K_thMass, 4.0, 0 }, { K_thTime, 3.0, 0 }, { K_env, 0.0, "indoor" } };
+static const be_kv PRESET_124[] = { { K_kind, 0.0, "footsteps" }, { K_env, 0.0, "indoor" } };
+static const be_kv PRESET_125[] = { { K_kind, 0.0, "footsteps" }, { K_ftFoot, 0.0, "shoe" }, { K_ftSurface, 0.0, "wood" }, { K_ftGait, 0.0, "sneak" }, { K_ftSteps, 4.0, 0 }, { K_env, 0.0, "room" } };
+static const be_kv PRESET_126[] = { { K_kind, 0.0, "footsteps" }, { K_ftSurface, 0.0, "wood" }, { K_ftGait, 0.0, "run" }, { K_ftSteps, 8.0, 0 }, { K_env, 0.0, "room" } };
+static const be_kv PRESET_127[] = { { K_kind, 0.0, "footsteps" }, { K_ftSurface, 0.0, "metal" }, { K_env, 0.0, "indoor" } };
+static const be_kv PRESET_128[] = { { K_kind, 0.0, "footsteps" }, { K_ftSurface, 0.0, "gravel" }, { K_env, 0.0, "field" } };
+static const be_kv PRESET_129[] = { { K_kind, 0.0, "footsteps" }, { K_ftSurface, 0.0, "snow" }, { K_env, 0.0, "forest" } };
+static const be_kv PRESET_130[] = { { K_kind, 0.0, "footsteps" }, { K_ftFoot, 0.0, "shoe" }, { K_ftSurface, 0.0, "sand" }, { K_env, 0.0, "field" } };
+static const be_kv PRESET_131[] = { { K_kind, 0.0, "footsteps" }, { K_ftFoot, 0.0, "shoe" }, { K_ftSurface, 0.0, "grass" }, { K_env, 0.0, "forest" } };
+static const be_kv PRESET_132[] = { { K_kind, 0.0, "footsteps" }, { K_ftSurface, 0.0, "water" }, { K_ftGait, 0.0, "run" }, { K_env, 0.0, "urban" } };
+static const be_kv PRESET_133[] = { { K_kind, 0.0, "footsteps" }, { K_ftSurface, 0.0, "mud" }, { K_ftSteps, 4.0, 0 }, { K_env, 0.0, "field" } };
+static const be_kv PRESET_134[] = { { K_kind, 0.0, "footsteps" }, { K_ftMass, 110.0, 0 }, { K_ftGear, 0.8, 0 }, { K_env, 0.0, "indoor" } };
+static const be_kv PRESET_135[] = { { K_kind, 0.0, "footsteps" }, { K_ftFoot, 0.0, "robot" }, { K_ftMass, 6000.0, 0 }, { K_ftSteps, 4.0, 0 }, { K_ftDist, 15.0, 0 }, { K_env, 0.0, "field" } };
+static const be_kv PRESET_136[] = { { K_kind, 0.0, "footsteps" }, { K_ftFoot, 0.0, "robot" }, { K_ftLegs, 0.0, "4" }, { K_ftMass, 30.0, 0 }, { K_ftSteps, 8.0, 0 }, { K_env, 0.0, "room" } };
+static const be_kv PRESET_137[] = { { K_kind, 0.0, "footsteps" }, { K_ftFoot, 0.0, "claw" }, { K_ftLegs, 0.0, "4" }, { K_ftMass, 25.0, 0 }, { K_ftSteps, 8.0, 0 }, { K_env, 0.0, "room" } };
+static const be_kv PRESET_138[] = { { K_kind, 0.0, "footsteps" }, { K_ftFoot, 0.0, "bare" }, { K_ftLegs, 0.0, "4" }, { K_ftMass, 400.0, 0 }, { K_ftSurface, 0.0, "dirt" }, { K_ftGait, 0.0, "run" }, { K_ftSteps, 8.0, 0 }, { K_ftDist, 8.0, 0 }, { K_env, 0.0, "field" } };
+static const be_kv PRESET_139[] = { { K_kind, 0.0, "voice" }, { K_crDist, 10.0, 0 }, { K_env, 0.0, "field" } };
+static const be_kv PRESET_140[] = { { K_kind, 0.0, "voice" }, { K_crCall, 0.0, "alert" }, { K_crMass, 30.0, 0 }, { K_seqCount, 3.0, 0 }, { K_seqInterval, 0.4, 0 }, { K_env, 0.0, "urban" } };
+static const be_kv PRESET_141[] = { { K_kind, 0.0, "voice" }, { K_crCall, 0.0, "idle" }, { K_crMass, 45.0, 0 }, { K_crEffort, 0.8, 0 }, { K_crRough, 3.0, 0 }, { K_crLength, 4.0, 0 }, { K_crDist, 3.0, 0 }, { K_env, 0.0, "forest" } };
+static const be_kv PRESET_142[] = { { K_kind, 0.0, "voice" }, { K_crCall, 0.0, "idle" }, { K_crMass, 90.0, 0 }, { K_crDist, 2.0, 0 }, { K_env, 0.0, "room" } };
+static const be_kv PRESET_143[] = { { K_kind, 0.0, "voice" }, { K_crCall, 0.0, "pain" }, { K_crMass, 3.0, 0 }, { K_crDist, 2.0, 0 }, { K_env, 0.0, "forest" } };
+static const be_kv PRESET_144[] = { { K_kind, 0.0, "voice" }, { K_crCall, 0.0, "death" }, { K_crMass, 300.0, 0 }, { K_crDist, 4.0, 0 }, { K_env, 0.0, "field" } };
+static const be_kv PRESET_145[] = { { K_kind, 0.0, "voice" }, { K_crMass, 8000.0, 0 }, { K_crDist, 30.0, 0 }, { K_env, 0.0, "valley" } };
+static const be_kv PRESET_146[] = { { K_kind, 0.0, "voice" }, { K_crType, 0.0, "reptile" }, { K_crCall, 0.0, "alert" }, { K_crMass, 80.0, 0 }, { K_crLength, 4.0, 0 }, { K_crDist, 2.0, 0 }, { K_env, 0.0, "forest" } };
+static const be_kv PRESET_147[] = { { K_kind, 0.0, "voice" }, { K_crType, 0.0, "reptile" }, { K_crMass, 5000.0, 0 }, { K_crDist, 20.0, 0 }, { K_env, 0.0, "valley" } };
+static const be_kv PRESET_148[] = { { K_kind, 0.0, "voice" }, { K_crType, 0.0, "robot" }, { K_crCall, 0.0, "alert" }, { K_crMass, 50.0, 0 }, { K_seqCount, 3.0, 0 }, { K_seqInterval, 0.25, 0 }, { K_crDist, 2.0, 0 }, { K_env, 0.0, "indoor" } };
+static const be_kv PRESET_149[] = { { K_kind, 0.0, "voice" }, { K_crType, 0.0, "robot" }, { K_crMass, 200.0, 0 }, { K_crDist, 3.0, 0 }, { K_env, 0.0, "indoor" } };
+static const be_kv PRESET_150[] = { { K_kind, 0.0, "voice" }, { K_crType, 0.0, "robot" }, { K_crCall, 0.0, "death" }, { K_crMass, 100.0, 0 }, { K_crDist, 2.0, 0 }, { K_env, 0.0, "indoor" } };
+static const be_kv PRESET_151[] = { { K_kind, 0.0, "handling" }, { K_env, 0.0, "room" } };
+static const be_kv PRESET_152[] = { { K_kind, 0.0, "handling" }, { K_hdAction, 0.0, "pickup" }, { K_env, 0.0, "room" } };
+static const be_kv PRESET_153[] = { { K_kind, 0.0, "handling" }, { K_hdAction, 0.0, "use" }, { K_env, 0.0, "room" } };
+static const be_kv PRESET_154[] = { { K_kind, 0.0, "handling" }, { K_hdObject, 0.0, "keys" }, { K_hdAction, 0.0, "use" }, { K_env, 0.0, "room" } };
+static const be_kv PRESET_155[] = { { K_kind, 0.0, "handling" }, { K_hdObject, 0.0, "potion" }, { K_hdAction, 0.0, "use" }, { K_env, 0.0, "room" } };
+static const be_kv PRESET_156[] = { { K_kind, 0.0, "handling" }, { K_hdObject, 0.0, "potion" }, { K_hdHeight, 0.8, 0 }, { K_hdSurface, 0.0, "stone" }, { K_env, 0.0, "room" } };
+static const be_kv PRESET_157[] = { { K_kind, 0.0, "handling" }, { K_hdObject, 0.0, "blade" }, { K_hdAction, 0.0, "use" }, { K_env, 0.0, "room" } };
+static const be_kv PRESET_158[] = { { K_kind, 0.0, "handling" }, { K_hdObject, 0.0, "blade" }, { K_hdAction, 0.0, "equip" }, { K_env, 0.0, "room" } };
+static const be_kv PRESET_159[] = { { K_kind, 0.0, "handling" }, { K_hdObject, 0.0, "blade" }, { K_hdHeight, 1.0, 0 }, { K_hdSurface, 0.0, "stone" }, { K_hdDist, 1.5, 0 }, { K_env, 0.0, "indoor" } };
+static const be_kv PRESET_160[] = { { K_kind, 0.0, "handling" }, { K_hdObject, 0.0, "gem" }, { K_hdAction, 0.0, "pickup" }, { K_env, 0.0, "room" } };
+static const be_kv PRESET_161[] = { { K_kind, 0.0, "handling" }, { K_hdObject, 0.0, "armour" }, { K_hdAction, 0.0, "equip" }, { K_hdDist, 1.0, 0 }, { K_env, 0.0, "room" } };
+static const be_kv PRESET_162[] = { { K_kind, 0.0, "handling" }, { K_hdObject, 0.0, "armour" }, { K_hdHeight, 0.6, 0 }, { K_hdSurface, 0.0, "stone" }, { K_hdDist, 1.5, 0 }, { K_env, 0.0, "indoor" } };
+static const be_kv PRESET_163[] = { { K_kind, 0.0, "handling" }, { K_hdObject, 0.0, "leather" }, { K_hdAction, 0.0, "equip" }, { K_env, 0.0, "room" } };
+static const be_kv PRESET_164[] = { { K_kind, 0.0, "handling" }, { K_hdObject, 0.0, "paper" }, { K_hdAction, 0.0, "use" }, { K_env, 0.0, "room" } };
+static const be_kv PRESET_165[] = { { K_kind, 0.0, "handling" }, { K_hdObject, 0.0, "cloth" }, { K_hdHeight, 1.0, 0 }, { K_env, 0.0, "room" } };
+static const be_kv PRESET_166[] = { { K_kind, 0.0, "fire" }, { K_env, 0.0, "forest" } };
+static const be_kv PRESET_167[] = { { K_kind, 0.0, "fire" }, { K_fiMoist, 1.0, 0 }, { K_env, 0.0, "forest" } };
+static const be_kv PRESET_168[] = { { K_kind, 0.0, "fire" }, { K_fiMode, 0.0, "torch" }, { K_fiSize, 0.08, 0 }, { K_fiWind, 0.3, 0 }, { K_fiDist, 1.0, 0 }, { K_env, 0.0, "cave" } };
+static const be_kv PRESET_169[] = { { K_kind, 0.0, "fire" }, { K_fiMode, 0.0, "blaze" }, { K_fiSize, 8.0, 0 }, { K_fiDist, 15.0, 0 }, { K_env, 0.0, "urban" } };
+static const be_kv PRESET_170[] = { { K_kind, 0.0, "fire" }, { K_fiMode, 0.0, "burner" }, { K_fiSize, 0.15, 0 }, { K_fiWind, 0.0, 0 }, { K_fiDist, 1.5, 0 }, { K_env, 0.0, "indoor" } };
+static const be_kv PRESET_171[] = { { K_kind, 0.0, "fire" }, { K_fiMode, 0.0, "ignite" }, { K_fiSize, 0.5, 0 }, { K_fiDist, 3.0, 0 }, { K_env, 0.0, "indoor" } };
+static const be_kv PRESET_172[] = { { K_kind, 0.0, "fire" }, { K_fiMode, 0.0, "ignite" }, { K_fiSize, 3.0, 0 }, { K_fiDist, 15.0, 0 }, { K_env, 0.0, "field" } };
 
-#define PRESET_COUNT 83
+#define PRESET_COUNT 173
 static const be_preset PRESETS[PRESET_COUNT] = {
   { "rifle", "Rifle, downrange", PRESET_0, 1 },
   { "ear", "Rifle, at the shooter", PRESET_1, 4 },
@@ -477,6 +695,96 @@ static const be_preset PRESETS[PRESET_COUNT] = {
   { "lakeice", "Rain on lake ice", PRESET_80, 8 },
   { "laservoice", "Voice through a dispersive line", PRESET_81, 7 },
   { "springvoice", "Voice in a spring", PRESET_82, 7 },
+  { "drip", "Drip", PRESET_83, 3 },
+  { "cavedrip", "Cave drip", PRESET_84, 7 },
+  { "wetfloor", "Drip on a wet floor", PRESET_85, 7 },
+  { "pondstone", "Stone into a pond", PRESET_86, 7 },
+  { "bodywater", "Body into water", PRESET_87, 7 },
+  { "mudstep", "Boot into mud", PRESET_88, 8 },
+  { "pourglass", "Pouring a glass", PRESET_89, 5 },
+  { "bucket", "Filling a bucket", PRESET_90, 8 },
+  { "quench", "Blade quench", PRESET_91, 7 },
+  { "brook", "Brook, loop", PRESET_92, 5 },
+  { "pondrain", "Rain on a pond, loop", PRESET_93, 5 },
+  { "drizzle", "Drizzle on water, loop", PRESET_94, 5 },
+  { "kettle", "Kettle singing, loop", PRESET_95, 6 },
+  { "boil", "Rolling boil, loop", PRESET_96, 6 },
+  { "mudpot", "Mud pot, loop", PRESET_97, 6 },
+  { "lavapool", "Lava pool, loop", PRESET_98, 6 },
+  { "acidvat", "Acid vat, loop", PRESET_99, 6 },
+  { "hydroclose", "Hydraulic door, closing", PRESET_100, 2 },
+  { "hydroopen", "Hydraulic door, opening", PRESET_101, 3 },
+  { "airdoor", "Pneumatic door", PRESET_102, 9 },
+  { "blastdoor", "Blast door", PRESET_103, 10 },
+  { "shutter", "Roller shutter", PRESET_104, 11 },
+  { "creakdoor", "Creaking door", PRESET_105, 12 },
+  { "doorslam", "Door slam", PRESET_106, 12 },
+  { "locker", "Locker door", PRESET_107, 10 },
+  { "crateopen", "Crate lid, opening", PRESET_108, 13 },
+  { "crateshut", "Crate lid, dropped shut", PRESET_109, 11 },
+  { "turret", "Turret traverse", PRESET_110, 11 },
+  { "servo", "Robot servo", PRESET_111, 14 },
+  { "switch", "Switch", PRESET_112, 9 },
+  { "lever", "Heavy lever", PRESET_113, 9 },
+  { "engcool", "Engine cooling, ticks", PRESET_114, 4 },
+  { "exhaust", "Exhaust pipe ticking", PRESET_115, 7 },
+  { "oven", "Oven heating up", PRESET_116, 7 },
+  { "roofsun", "Tin roof in the sun", PRESET_117, 8 },
+  { "housecool", "House settling at night", PRESET_118, 8 },
+  { "acidsteel", "Acid eats through steel", PRESET_119, 5 },
+  { "acidcrate", "Acid on a wooden crate", PRESET_120, 6 },
+  { "lavacrate", "Crate into lava", PRESET_121, 7 },
+  { "lavasteel", "Steel into lava", PRESET_122, 6 },
+  { "torchcut", "Cutting torch", PRESET_123, 5 },
+  { "boots", "Boots on concrete", PRESET_124, 2 },
+  { "sneak", "Sneaking on boards", PRESET_125, 6 },
+  { "runboards", "Running on boards", PRESET_126, 5 },
+  { "grate", "Boots on a metal grate", PRESET_127, 3 },
+  { "gravel", "Walking on gravel", PRESET_128, 3 },
+  { "snow", "Walking in snow", PRESET_129, 3 },
+  { "sand", "Walking on sand", PRESET_130, 4 },
+  { "grass", "Walking through grass", PRESET_131, 4 },
+  { "puddles", "Running through puddles", PRESET_132, 4 },
+  { "mudwade", "Wading through mud", PRESET_133, 4 },
+  { "armour", "Armoured soldier", PRESET_134, 4 },
+  { "mech", "Mech walker", PRESET_135, 6 },
+  { "robodog", "Robot dog", PRESET_136, 6 },
+  { "clawtiles", "Claws on a hard floor", PRESET_137, 6 },
+  { "beast", "Large beast, running", PRESET_138, 9 },
+  { "roar", "Big cat roar", PRESET_139, 3 },
+  { "bark", "Dog barking", PRESET_140, 6 },
+  { "growl", "Wolf growl", PRESET_141, 8 },
+  { "grunt", "Grunt", PRESET_142, 5 },
+  { "hurt", "Small creature hurt", PRESET_143, 5 },
+  { "dying", "Beast dying", PRESET_144, 5 },
+  { "giant", "Giant monster roar", PRESET_145, 4 },
+  { "hiss", "Reptile hiss", PRESET_146, 7 },
+  { "dragon", "Dragon roar", PRESET_147, 5 },
+  { "robotalert", "Robot alert", PRESET_148, 8 },
+  { "robottaunt", "Robot taunt", PRESET_149, 5 },
+  { "robotdown", "Robot shutting down", PRESET_150, 6 },
+  { "coindrop", "Coins dropped on a table", PRESET_151, 2 },
+  { "coinpick", "Picking up coins", PRESET_152, 3 },
+  { "coincount", "Counting coins", PRESET_153, 3 },
+  { "keys", "Keys", PRESET_154, 4 },
+  { "potion", "Uncorking a potion", PRESET_155, 4 },
+  { "potiondrop", "Potion dropped", PRESET_156, 5 },
+  { "draw", "Drawing a sword", PRESET_157, 4 },
+  { "sheathe", "Sheathing a sword", PRESET_158, 4 },
+  { "sworddrop", "Sword dropped on stone", PRESET_159, 6 },
+  { "gem", "Gem picked up", PRESET_160, 4 },
+  { "armouron", "Putting on armour", PRESET_161, 5 },
+  { "armourdrop", "Armour dropped", PRESET_162, 6 },
+  { "intobag", "Into the bag", PRESET_163, 4 },
+  { "scroll", "Unrolling a scroll", PRESET_164, 4 },
+  { "clothes", "Clothes dropped", PRESET_165, 4 },
+  { "campfire", "Campfire, loop", PRESET_166, 2 },
+  { "wetfire", "Wet wood fire, loop", PRESET_167, 3 },
+  { "walltorch", "Wall torch, loop", PRESET_168, 6 },
+  { "blaze", "Burning building, loop", PRESET_169, 5 },
+  { "furnace", "Gas furnace, loop", PRESET_170, 6 },
+  { "ignite", "Brazier ignites", PRESET_171, 5 },
+  { "fireball", "Fuel cloud ignites", PRESET_172, 5 },
 };
 
 enum {
@@ -513,7 +821,7 @@ static const be_material MATERIALS[MATERIAL_COUNT] = {
   { "string", 96.0, 6, { 1.0, 2.0, 3.01, 4.03, 5.06, 6.1 }, 0.3, 0.35, 0.0008, 0.6, { 0.012, 60.0, 1300.0, 0.6 }, 0, { 0, 0.0, 0, { 0.0, 0.0 }, 0.0 } },
 };
 
-#define ENV_COUNT 8
+#define ENV_COUNT 10
 static const be_env ENVS[ENV_COUNT] = {
   { "none", "Anechoic", 0, 0.0, 0, { 0.0 }, 0.0, 0.0, 0, { { 0.0, 0.0, 0.0 } } },
   { "field", "Open field", 0, 1.4, 8, { 83.0, 109.0, 131.0, 157.0, 193.0, 227.0, 263.0, 311.0 }, 2500.0, -15.0, 0, { { 0.0, 0.0, 0.0 } } },
@@ -522,6 +830,8 @@ static const be_env ENVS[ENV_COUNT] = {
   { "valley", "Mountain valley", 0, 4.5, 8, { 211.0, 283.0, 353.0, 431.0, 509.0, 613.0, 727.0, 853.0 }, 1400.0, -12.0, 3, { { 480.0, 0.35, 0.5 }, { 900.0, 0.25, -0.6 }, { 1500.0, 0.15, 0.2 } } },
   { "indoor", "Indoor range", 0, 1.1, 8, { 9.0, 14.0, 17.0, 22.0, 30.0, 38.0, 48.0, 56.0 }, 6000.0, -5.0, 0, { { 0.0, 0.0, 0.0 } } },
   { "water", "Deep water", 0, 3.8, 8, { 131.0, 197.0, 263.0, 347.0, 431.0, 523.0, 617.0, 733.0 }, 900.0, -9.0, 0, { { 0.0, 0.0, 0.0 } } },
+  { "room", "Small room", 0, 0.45, 8, { 5.0, 7.0, 11.0, 13.0, 17.0, 19.0, 23.0, 29.0 }, 7000.0, -12.0, 0, { { 0.0, 0.0, 0.0 } } },
+  { "cave", "Cave", 0, 2.6, 8, { 19.0, 27.0, 37.0, 47.0, 61.0, 73.0, 89.0, 103.0 }, 3500.0, -6.0, 0, { { 0.0, 0.0, 0.0 } } },
   { "ir", "Recorded room", 1, 0.0, 0, { 0.0 }, 0.0, 0.0, 0, { { 0.0, 0.0, 0.0 } } },
 };
 #define BODY_COUNT 3

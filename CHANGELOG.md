@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.0 - 2026-11-19
+
+- Follows Ballistic 3603078, which adds a family of game sounds (liquids, mechanisms, heat, fire, footsteps, voices,
+  handling). Those kinds are not ported yet: they answer `BE_ERR_KIND`, and `be_preset_supported()` says no for
+  their 98 presets, so a host can render them with the JavaScript engine meanwhile.
+- New rooms from Ballistic: small room and cave.
+- Finishing a loop: the sub drops of the Weight filter now come from the kept period, found after one period of
+  warm-up, and repeat in every period, so a loop with sharp onsets closes cleanly through the action filters. Loops
+  without onsets in the kept period are unchanged.
+- 73 of Ballistic's 173 presets render. Conformance: 376 sounds on two seeds, largest difference 3e-5.
+
 ## 0.4.0 - 2026-11-19
 
 - **Jet and rocket**: thrust, mass and drag along the path; jet mixing noise with its Strouhal peak, supersonic

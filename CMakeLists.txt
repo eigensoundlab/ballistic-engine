@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 cmake_minimum_required(VERSION 3.13)
-project(ballistic_engine VERSION 0.4.0 LANGUAGES C)
+project(ballistic_engine VERSION 0.5.0 LANGUAGES C)
 
 option(BE_SHARED "Build the shared library (for Python, Unity, Godot...)" ON)
 option(BE_TESTS "Build the tests" ON)
