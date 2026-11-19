@@ -81,7 +81,8 @@ rendering on the shot.
 Every release on GitHub has the library built for Linux (x64, arm64), macOS (universal), Windows (x64, arm64) and
 Android (arm64-v8a, armeabi-v7a, x86_64): `ballistic-engine-VERSION-PLATFORM.zip`, with the shared and static library,
 `ballistic-render`, the header and the Python binding. `ballistic-engine-VERSION-unity.zip` is ready for a Unity
-project. GitHub Actions builds them from the tagged source (`.github/workflows/release.yml`).
+project. GitHub Actions builds them from the tagged source (`.github/workflows/release.yml`): push a tag `vX.Y.Z` matching
+`CMakeLists.txt`, or run the Release workflow by hand with "publish" ticked.
 
 ## Build
 

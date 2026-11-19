@@ -1,14 +1,20 @@
 # SPDX-License-Identifier: Apache-2.0
-# Builds the library for every platform and, on a version tag (v0.3.0), publishes them as a GitHub release:
+# Builds the library for every platform and, on a version tag (v0.3.0) or when run by hand with "publish" ticked,
+# publishes them as a GitHub release (the tag is then made from the commit run, named after CMakeLists.txt's version):
 #   ballistic-engine-VERSION-PLATFORM.zip   the shared and static library, the CLI, the header, the Python binding
 #   ballistic-engine-VERSION-unity.zip      BallisticEngine.cs and the native plugins in Unity's folder layout
-# Run by hand (Actions > Release > Run workflow) it builds the same files as artifacts, without a release.
+# Run by hand without "publish" (Actions > Release > Run workflow) it builds the same files as artifacts only.
 name: Release
 
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish a release v<version from CMakeLists.txt> from this commit"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -128,11 +134,14 @@ jobs:
           name: unity
           path: out/*unity.zip
       - name: GitHub release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           awk -v v="$VERSION" '$1=="##" && $2==v {on=1; next} /^## / {on=0} on' CHANGELOG.md > notes.md
           test -s notes.md || { echo "CHANGELOG.md has no '## $VERSION' section"; exit 1; }
-          test "${GITHUB_REF_NAME#v}" = "$VERSION" || { echo "tag $GITHUB_REF_NAME, CMakeLists.txt $VERSION"; exit 1; }
-          gh release create "$GITHUB_REF_NAME" out/*.zip --title "Ballistic Engine $VERSION" --notes-file notes.md
+          tag="v$VERSION"
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            test "$GITHUB_REF_NAME" = "$tag" || { echo "tag $GITHUB_REF_NAME, CMakeLists.txt $VERSION"; exit 1; }
+          fi
+          gh release create "$tag" out/*.zip --target "$GITHUB_SHA" --title "Ballistic Engine $VERSION" --notes-file notes.md

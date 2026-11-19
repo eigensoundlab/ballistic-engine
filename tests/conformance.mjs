@@ -3,7 +3,7 @@
 /* The C engine against the JavaScript one (reference/engine.js): every preset of every kind the C engine renders,
    several seeds, the physics and Ballistic's game finishing, sample for sample.
 
-     node tests/conformance.mjs [path/to/ballistic-render] [--verbose] [--only ID]
+     node tests/conformance.mjs [path/to/ballistic-render] [--verbose] [--only ID] [--seeds 1,7]
 
    A sound conforms when it has the same length and events and no sample differs by more than TOLERANCE (the
    sounds peak at 1). The engines compute in the same order, so differences are rounding in the maths libraries
@@ -17,12 +17,12 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const args = process.argv.slice(2);
-const bin = args.find((a) => !a.startsWith('--') && args[args.indexOf(a) - 1] !== '--only') ||
+const bin = args.find((a) => !a.startsWith('--') && !['--only', '--seeds'].includes(args[args.indexOf(a) - 1])) ||
   path.join(ROOT, 'build', process.platform === 'win32' ? 'ballistic-render.exe' : 'ballistic-render');
 const verbose = args.includes('--verbose');
 const only = args.includes('--only') ? args[args.indexOf('--only') + 1] : null;
 const TOLERANCE = 1e-4;
-const SEEDS = [1, 2, 7, 1234567];
+const SEEDS = args.includes('--seeds') ? args[args.indexOf('--seeds') + 1].split(',').map(Number) : [1, 2, 7, 1234567];
 const ACTIONS = [null, 'game'];
 const EXTRA = [                                   // the parameters games change most
   ['pistol', { D: 0, target: 'none', env: 'indoor' }],

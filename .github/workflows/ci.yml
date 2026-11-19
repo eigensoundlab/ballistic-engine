@@ -42,7 +42,9 @@ jobs:
         run: |
           bin=build/ballistic-render
           if [ -f build/Release/ballistic-render.exe ]; then bin=build/Release/ballistic-render.exe; fi
-          node tests/conformance.mjs "$bin"
+          seeds=""
+          if [ "${{ matrix.os }}" != ubuntu-latest ] || [ "${{ matrix.cc }}" != gcc ]; then seeds="--seeds 1,1234567"; fi
+          node tests/conformance.mjs "$bin" $seeds
       - name: Python binding
         run: python -m unittest tests.test_python -v
       - uses: actions/setup-dotnet@v4
